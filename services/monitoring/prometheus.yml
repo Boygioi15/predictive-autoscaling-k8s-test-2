@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: "prime-service"
+    static_configs:
+      - targets: ["prime-service:3000"]
+
+  - job_name: "text-service"
+    static_configs:
+      - targets: ["text-service:3001"]

@@ -1,0 +1,39 @@
+name: predictive-autoscaling-k8s-test
+services:
+  prime-service:
+    build: ./services/prime-service
+    container_name: prime-service-test
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+  text-service:
+    build: ./services/text-service
+    container_name: text-service-test
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=production
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus_server
+    ports:
+      - "9090:9090"
+    volumes:
+      # Gắn file cấu hình ở Bước 2 vào container
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      # Lưu trữ dữ liệu lịch sử để không bị mất khi tắt máy
+      - prometheus_data:/prometheus
+
+  frontend:
+    build: ./services/frontend
+    container_name: frontend-test
+    ports:
+      - "8080:80"
+    depends_on:
+      - prime-service
+      - text-service
+
+volumes:
+  prometheus_data:

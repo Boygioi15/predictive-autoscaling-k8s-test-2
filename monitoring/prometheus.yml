@@ -1,0 +1,19 @@
+# monitoring/prometheus.yml
+global:
+  scrape_interval: 5s # Cứ 5 giây đi thu thập dữ liệu 1 lần (để AI có nhiều data)
+
+scrape_configs:
+  # Cấu hình tự giám sát bản thân Prometheus
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+
+  # Cấu hình giám sát Prime Service
+  - job_name: "prime-service"
+    static_configs:
+      - targets: ["prime-service:3000"]
+
+  # Cấu hình giám sát Text Service
+  - job_name: "text-service"
+    static_configs:
+      - targets: ["text-service:3001"]
