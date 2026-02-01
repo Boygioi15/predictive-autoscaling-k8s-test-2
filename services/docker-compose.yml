@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  prime-service:
+    build: ./prime-service
+    container_name: prime-service-test
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+  text-service:
+    build: ./text-service
+    container_name: text-service-test
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=production
+  frontend:
+    build: ./frontend
+    container_name: frontend-test
+    ports:
+      - "8080:80"
+    depends_on:
+      - prime-service
+      - text-service
