@@ -5,15 +5,60 @@ services:
     container_name: prime-service-test
     ports:
       - "3000:3000"
-    environment:
-      - NODE_ENV=production
   text-service:
     build: ./services/text-service
     container_name: text-service-test
     ports:
       - "3001:3000"
+
+  frontend:
+    build: ./services/frontend
+    container_name: frontend-test
+    ports:
+      - "8080:80"
+    depends_on:
+      - prime-service
+      - text-service
+
+  locust-master:
+    build:
+      context: ./load-test
+      dockerfile: Dockerfile
+    container_name: locust-master
+    ports:
+      - "8089:8089" # Web UI
+      - "5557:5557" # Master <-> Worker
+      - "5558:5558"
+
+    command:
+      - -f
+      - /mnt/locust/locustfile.py
+      - --master
+      - --web-host=0.0.0.0
+
+  locust-worker:
+    build:
+      context: ./load-test
+      dockerfile: Dockerfile
+    container_name: locust-worker
+    depends_on:
+      - locust-master
+
+    command:
+      - -f
+      - /mnt/locust/locustfile.py
+      - --worker
+      - --master-host=locust-master
+
+  locust-exporter:
+    image: containersol/locust_exporter
+    container_name: locust-exporter
+    ports:
+      - "9646:9646"
     environment:
-      - NODE_ENV=production
+      - LOCUST_EXPORTER_URI=http://locust-master:8089
+    depends_on:
+      - locust-master
 
   prometheus:
     image: prom/prometheus:latest
@@ -26,14 +71,26 @@ services:
       # Lưu trữ dữ liệu lịch sử để không bị mất khi tắt máy
       - prometheus_data:/prometheus
 
-  frontend:
-    build: ./services/frontend
-    container_name: frontend-test
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
     ports:
-      - "8080:80"
+      - "2999:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
     depends_on:
-      - prime-service
-      - text-service
+      - prometheus
+
+  ai-model:
+    build: ./ai-model
+    container_name: ai-model
+    depends_on:
+      - prometheus
+    environment:
+      - PROMETHEUS_URL = http://prometheus:9090
+    volumes:
+      - ./ai-model/data:/app/data
 
 volumes:
   prometheus_data:
+  grafana_data:

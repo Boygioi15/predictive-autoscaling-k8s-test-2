@@ -16,4 +16,8 @@ scrape_configs:
   # Cấu hình giám sát Text Service
   - job_name: "text-service"
     static_configs:
-      - targets: ["text-service:3001"]
+      - targets: ["text-service:3000"]
+
+  - job_name: "locust"
+    static_configs:
+      - targets: ["locust-exporter:9646"]

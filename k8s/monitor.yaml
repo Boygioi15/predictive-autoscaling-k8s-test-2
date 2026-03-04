@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend-service-monitor
+  namespace: monitoring
+  labels:
+    release: monitoring-stack
+spec:
+  selector:
+    matchLabels:
+      monitor: "true" # <--- Quét TẤT CẢ service có nhãn này
+  namespaceSelector:
+    matchNames:
+      - default
+  endpoints:
+    - port: http # Yêu cầu các service phải đặt tên port là "http"
+      interval: 15s

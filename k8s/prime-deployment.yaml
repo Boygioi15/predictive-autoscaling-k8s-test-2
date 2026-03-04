@@ -1,0 +1,32 @@
+# PHẦN 1: HEADER (THÔNG TIN CHUNG)
+apiVersion: apps/v1 # Phiên bản API của K8s (Deployment dùng apps/v1)
+kind: Deployment # Loại tài nguyên muốn tạo
+metadata:
+  name: prime-service-deployment # Tên định danh của Deployment này
+  labels:
+    app: prime-service
+spec:
+  replicas: 1 # Số lượng Pod muốn chạy (Scale ở đây)
+
+  # KẾT NỐI (SELECTOR) - CỰC KỲ QUAN TRỌNG
+  selector:
+    matchLabels:
+      app: prime-service # "Tôi chỉ quản lý những thằng Pod nào dán nhãn này"
+  template:
+    # 3.1: Nhãn của Pod (Phải khớp với Selector ở trên)
+    metadata:
+      labels:
+        app: prime-service # <--- Dán cái nhãn này lên trán Pod
+
+    # 3.2: Cấu hình Container (Giống Docker Compose)
+    spec:
+      containers:
+        - name: prime-service-container # Tên của container bên trong Pod
+          image: prime-service:v1 # Tên Image (đã build)
+
+          # CHẾ ĐỘ KÉO IMAGE (Đặc biệt quan trọng với Minikube)
+          imagePullPolicy: Never
+
+          # CỔNG CỦA CONTAINER
+          ports:
+            - containerPort: 3000 # CHỈ MANG TÍNH CHẤT THÔNG BÁO! Ứng dụng bên trong lắng nghe ở cổng này

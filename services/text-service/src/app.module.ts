@@ -3,6 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TextModule } from './text/text.module';
 import { PrometheusModule } from '@willsoto/nestjs-prometheus';
+import { MetricModule } from './metric/metric.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { PrometheusModule } from '@willsoto/nestjs-prometheus';
         enabled: true, // Bật thu thập CPU/RAM mặc định
       },
     }),
+    MetricModule,
   ],
   controllers: [AppController],
   providers: [AppService],

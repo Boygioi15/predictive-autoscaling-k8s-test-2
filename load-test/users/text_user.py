@@ -3,10 +3,10 @@ import random
 from utils.payload import random_text
 
 class TextUser(HttpUser):
-    host = "http://localhost:3001"
+    host = "http://text-service:3000"
     wait_time = between(1, 2)
 
-    @task(2)
+    @task(1)
     def analyze_text(self):
         text = random_text(1000)
         self.client.post(

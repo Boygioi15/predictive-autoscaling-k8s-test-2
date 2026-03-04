@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-deployment
+  labels:
+    app: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: frontend:v1
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080 # Cổng web server của frontend
+
+          # --- PHẦN KHÁC BIỆT NẰM Ở ĐÂY ---
+          env:
+            - name: PRIME_SERVICE_URL # Tên biến trong code của bạn
+              value: "http://192.168.49.2:31001" # <-- Paste link Bước 1 vào đây
+            - name: TEXT_SERVICE_URL # Tên biến trong code của bạn
+              value: "http://192.168.49.2:32050" # <-- Paste link Bước 1 vào đây

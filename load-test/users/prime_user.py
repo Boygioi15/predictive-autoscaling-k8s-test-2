@@ -2,10 +2,18 @@ from locust import HttpUser, task, between
 import random
 
 class PrimeUser(HttpUser):
-    host = "http://localhost:3000"
+    host = "http://prime-service:3000"
     wait_time = between(1, 3)
 
-    @task(2)
+
+    @task(1)
+    def range_prime(self):
+        n = random.randint(1_000_000, 10_000_000)
+        self.client.get(
+            f"/prime/range?n={n}",
+            name="/prime/range"
+        )
+    @task(1)
     def check_prime(self):
         n = random.randint(1_000_000, 10_000_000)
         self.client.get(

@@ -5,4 +5,4 @@ class WebsiteUser(PrimeUser):
     weight = 2
 
 class TextWebsiteUser(TextUser):
-    weight = 3
+    weight = 2

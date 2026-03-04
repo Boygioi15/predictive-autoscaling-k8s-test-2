@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: text-service # Tên Service (ngắn gọn)
+  labels:
+    app: text-service
+    monitor: "true"
+spec:
+  type: ClusterIP # Loại Service (để test từ ngoài)
+  selector:
+    app: text-service # <--- QUAN TRỌNG: Phải khớp với label của Pod trong Deployment
+  ports:
+    - port: 8080 # Cổng của Service (Frontend gọi vào đây)
+      name: http
+      targetPort: 3000 # Cổng của Container (Code Node/Python của bạn)
