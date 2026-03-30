@@ -22,8 +22,4 @@ spec:
             - containerPort: 8080 # Cổng web server của frontend
 
           # --- PHẦN KHÁC BIỆT NẰM Ở ĐÂY ---
-          env:
-            - name: PRIME_SERVICE_URL # Tên biến trong code của bạn
-              value: "http://192.168.49.2:31001" # <-- Paste link Bước 1 vào đây
-            - name: TEXT_SERVICE_URL # Tên biến trong code của bạn
-              value: "http://192.168.49.2:32050" # <-- Paste link Bước 1 vào đây
+

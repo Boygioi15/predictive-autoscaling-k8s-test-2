@@ -2,7 +2,8 @@ from locust import HttpUser, task, between
 import random
 
 class PrimeUser(HttpUser):
-    host = "http://prime-service:3000"
+    abstract = True
+    host = "http://prime-service:8080"
     wait_time = between(1, 3)
 
 

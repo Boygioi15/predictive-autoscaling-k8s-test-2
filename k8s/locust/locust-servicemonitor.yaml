@@ -1,0 +1,13 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: locust-exporter-monitor
+  labels:
+    release: prometheus # Important: Check your Prometheus helm release name
+spec:
+  selector:
+    matchLabels:
+      app: locust-exporter
+  endpoints:
+  - port: metrics
+    interval: 10s

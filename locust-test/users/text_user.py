@@ -3,7 +3,8 @@ import random
 from utils.payload import random_text
 
 class TextUser(HttpUser):
-    host = "http://text-service:3000"
+    abstract = True
+    host = "http://text-service:8080"
     wait_time = between(1, 2)
 
     @task(1)

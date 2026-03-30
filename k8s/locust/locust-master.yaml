@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: locust-master
+  template:
+    metadata:
+      labels:
+        app: locust-master
+    spec:
+      containers:
+        - name: locust-master
+          image: locust-test:v1
+          imagePullPolicy: Never  
+          args: ["-f", "/mnt/locust/locustfile.py", "--master"]
+          ports:
+            - containerPort: 8089 # Web UI
+            - containerPort: 5557 # Communication - command
+            - containerPort: 5558 # Communication - statistic
+          env: 
+            - name: PRIME_USER_WEIGHT
+              value: "10" # Set weight for PrimeUser
+            - name: TEXT_USER_WEIGHT
+              value: "0" # Set weight for TextWebsiteUser
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: locust-master
+spec:
+  selector:
+    app: locust-master
+  ports:
+    - name: web
+      port: 8089
+      targetPort: 8089
+    - name: comm-1
+      port: 5557
+      targetPort: 5557
+    - name: comm-2
+      port: 5558
+      targetPort: 5558
+  type: NodePort # Use NodePort to access UI on Minikube
