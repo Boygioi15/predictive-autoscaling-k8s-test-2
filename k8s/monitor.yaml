@@ -14,4 +14,4 @@ spec:
       - default
   endpoints:
     - port: http # Yêu cầu các service phải đặt tên port là "http"
-      interval: 15s
+      interval: 5s

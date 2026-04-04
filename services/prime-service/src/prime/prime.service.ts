@@ -1,7 +1,31 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 
 @Injectable()
 export class PrimeService {
+  private readonly logger = new Logger(PrimeService.name);
+  private readonly intervalSeconds = 1.5;
+  private intervalRef?: NodeJS.Timeout;
+
+  // onModuleInit(): void {
+  //   const kthPrimeTarget = 200000;
+  //   this.logger.log(
+  //     `Starting prime background job every ${this.intervalSeconds}s for the ${kthPrimeTarget}th prime`,
+  //   );
+  //   this.runScheduledJob(kthPrimeTarget);
+  //   this.intervalRef = setInterval(() => {
+  //     this.runScheduledJob(kthPrimeTarget);
+  //   }, this.intervalSeconds * 1000);
+  // }
+
+  // onModuleDestroy(): void {
+  //   if (this.intervalRef) {
+  //     clearInterval(this.intervalRef);
+  //   }
+  // }
+
   // Hàm kiểm tra nguyên tố (Giữ nguyên để tốn CPU)
   private isPrime(num: number): boolean {
     if (num <= 1) return false;
@@ -38,6 +62,16 @@ export class PrimeService {
       num++;
     }
     return -1;
+  }
+
+  private runScheduledJob(k: number): void {
+    const start = Date.now();
+    const result = this.findKthPrime(k);
+    const end = Date.now();
+
+    this.logger.log(
+      `Background job completed: ${k}th prime = ${result}, time taken = ${end - start}ms`,
+    );
   }
 
   // Block 3: Kiểm tra số N (Giữ nguyên)

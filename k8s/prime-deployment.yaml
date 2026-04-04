@@ -30,3 +30,11 @@ spec:
           # CỔNG CỦA CONTAINER
           ports:
             - containerPort: 3000 # CHỈ MANG TÍNH CHẤT THÔNG BÁO! Ứng dụng bên trong lắng nghe ở cổng này
+          
+          resources:
+            limits:
+              cpu: "400m"      # This forces: 40000 100000
+              memory: "128Mi"  # Protects your Nitro from RAM leaks
+            requests:
+              cpu: "400m"      # Ensures the pod gets its fair share
+              memory: "128Mi"

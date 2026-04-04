@@ -27,11 +27,12 @@ metadata:
   name: locust-exporter
   labels:
     app: locust-exporter
+    monitor: "true" # <--- Quét TẤT CẢ service có nhãn này
     release: prometheus # This label must match your kube-prometheus-stack selector
 spec:
   selector:
     app: locust-exporter
   ports:
-    - name: metrics
+    - name: http
       port: 9646
       targetPort: 9646

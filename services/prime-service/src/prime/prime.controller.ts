@@ -13,7 +13,7 @@ export class PrimeController {
   getPrimesCountInRange(@Query('n') n: string) {
     // increment and log counter
     PrimeController.routeCounts.range++;
-    console.log(`[prime/range] called ${PrimeController.routeCounts.range} times`);
+    console.log(`[prime/range] called ${PrimeController.routeCounts.range} times with n=${n}`);
 
     const num = parseInt(n);
     if (isNaN(num) || num < 0)
@@ -36,7 +36,7 @@ export class PrimeController {
   @Get('kth')
   getKthPrime(@Query('k') k: string) {
     PrimeController.routeCounts.kth++;
-    console.log(`[prime/kth] called ${PrimeController.routeCounts.kth} times`);
+    console.log(`[prime/kth] called ${PrimeController.routeCounts.kth} times with k=${k}`);
 
     const num = parseInt(k);
     if (isNaN(num) || num <= 0)
@@ -57,7 +57,7 @@ export class PrimeController {
   @Get('check')
   checkPrime(@Query('n') n: string) {
     PrimeController.routeCounts.check++;
-    console.log(`[prime/check] called ${PrimeController.routeCounts.check} times`);
+    console.log(`[prime/check] called ${PrimeController.routeCounts.check} times with n=${n}`);
 
     const num = parseInt(n);
     if (isNaN(num)) throw new BadRequestException('N phải là số');

@@ -23,9 +23,60 @@ spec:
             - containerPort: 5558 # Communication - statistic
           env: 
             - name: PRIME_USER_WEIGHT
-              value: "10" # Set weight for PrimeUser
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_USER_WEIGHT
+            - name: PRIME_RANGE_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_RANGE_INTERVAL
+            - name: PRIME_RANGE_MIN
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_RANGE_MIN
+            - name: PRIME_RANGE_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_RANGE_MAX
+            - name: PRIME_KTH_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_KTH_INTERVAL
+            - name: PRIME_KTH_MIN
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_KTH_MIN
+            - name: PRIME_KTH_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_KTH_MAX
+            - name: PRIME_CHECK_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_CHECK_INTERVAL
+            - name: PRIME_CHECK_MIN
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_CHECK_MIN
+            - name: PRIME_CHECK_MAX
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: PRIME_CHECK_MAX
             - name: TEXT_USER_WEIGHT
-              value: "0" # Set weight for TextWebsiteUser
+              valueFrom:
+                configMapKeyRef:
+                  name: locust-config
+                  key: TEXT_USER_WEIGHT
 ---
 apiVersion: v1
 kind: Service
