@@ -1,0 +1,47 @@
+# PHẦN 1: HEADER (THÔNG TIN CHUNG)
+apiVersion: apps/v1 # Phiên bản API của K8s (Deployment dùng apps/v1)
+kind: Deployment # Loại tài nguyên muốn tạo
+metadata:
+  name: custom-scaling-server-deployment # Tên định danh của Deployment này
+  labels:
+    app: custom-scaling-server
+spec:
+  replicas: 1 # Số lượng Pod muốn chạy (Scale ở đây)
+
+  # KẾT NỐI (SELECTOR) - CỰC KỲ QUAN TRỌNG
+  selector:
+    matchLabels:
+      app: custom-scaling-server # "Tôi chỉ quản lý những thằng Pod nào dán nhãn này"
+  template:
+    # 3.1: Nhãn của Pod (Phải khớp với Selector ở trên)
+    metadata:
+      labels:
+        app: custom-scaling-server # <--- Dán cái nhãn này lên trán Pod
+
+    # 3.2: Cấu hình Container (Giống Docker Compose)
+    spec:
+      containers:
+        - name: custom-scaling-server-container # Tên của container bên trong Pod
+          image: custom-scaling-server:latest # Tên Image (đã build)
+
+          # CHẾ ĐỘ KÉO IMAGE (Đặc biệt quan trọng với Minikube)
+          imagePullPolicy: Never
+
+          # CỔNG CỦA CONTAINER
+          ports:
+            - containerPort: 1208 # CHỈ MANG TÍNH CHẤT THÔNG BÁO! Ứng dụng bên trong lắng nghe ở cổng này
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: custom-scaling-server-service # Tên Service (ngắn gọn)
+  labels:
+    app: custom-scaling-server-service
+spec:
+  type: ClusterIP # Loại Service (để test từ ngoài)
+  selector:
+    app: custom-scaling-server # <--- QUAN TRỌNG: Phải khớp với label của Pod trong Deployment
+  ports:
+    - port: 1208 # Cổng của Service (Frontend gọi vào đây)
+      targetPort: 1208 # Cổng của Container (Code Node/Python của bạn)

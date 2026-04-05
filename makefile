@@ -71,6 +71,11 @@ open-locust:
 	- kubectl port-forward svc/locust-master 8089:8089
 
 
+tss-build: 
+	minikube -p=thesis image build -t custom-scaling-server:latest ./helper/custom-scaling-server
+tss-deploy: 
+	kubectl apply -f k8s/custom-scaling-server.yaml
+#curl -X PUT http://localhost:1208?n=5
 #### 2. Makefile for managing Minikube cluster and services with cgroup adjustments
 start-environment: 
 	$(MAKE)	start
