@@ -2,7 +2,7 @@
 
 # 1. Lock Frequency for Cores 10 through 15
 # -c 10-15 targets only your chosen research cores
-sudo cpupower -c 10-15 frequency-set -u 2000MHz -d 2000MHz
+sudo cpupower -c 10-15 frequency-set -u 2500MHz -d 2500MHz
 
 # 2. Disable Sleep States (C-States) ONLY for Cores 10-15
 # This prevents these specific cores from "napping" during your scaling tests

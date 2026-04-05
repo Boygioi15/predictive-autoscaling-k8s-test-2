@@ -14,3 +14,25 @@ data:
   PRIME_KTH_MAX: "50000"
   PRIME_CHECK_MIN: "5000000"
   PRIME_CHECK_MAX: "100000000"
+  
+  # Locust Load Testing Scenarios default values
+  #spike, idle, daily, staircase, playlist
+  SCENARIO: "none"
+  PLAYLIST_SCHEDULE: "idle:10,spike:5,daily:10,staircase:5,idle:10"
+  
+  IDLE_BASE_USERS: "50"
+  IDLE_VARIATION: "10"
+  IDLE_PERIOD_SEC: "60"
+  
+  SPIKE_BASE_USERS: "10"
+  SPIKE_PEAK_USERS: "100"
+  SPIKE_RAMPUP_MINS: "2"
+  SPIKE_HOLD_PEAK_MINS: "3"
+
+  DAILY_BASE_USERS: "50"
+  DAILY_VARIATION: "30"
+  DAILY_PERIOD_SEC: "300"
+  
+  STAIRCASE_BASE_USERS: "50"
+  STAIRCASE_STEP_USERS: "10"
+  STAIRCASE_STEP_DUR_SEC: "30"

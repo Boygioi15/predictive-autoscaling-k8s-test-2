@@ -43,11 +43,19 @@ restart-service:
 	- kubectl rollout restart deployment prime-service-deployment
 	- kubectl rollout restart deployment text-service-deployment
 	- kubectl rollout restart deployment frontend-deployment
-install-helm: 
+install-helm-monitor: 
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 	helm repo update
 	kubectl create namespace monitoring
 	helm install monitoring-stack prometheus-community/kube-prometheus-stack -n monitoring
+install-helm-ingress: 
+	helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+	helm repo update
+	helm install ingress-nginx ingress-nginx/ingress-nginx \
+	--namespace ingress-nginx --create-namespace \
+	--set controller.metrics.enabled=true \
+	--set controller.metrics.serviceMonitor.enabled=true \
+	--set controller.metrics.serviceMonitor.additionalLabels.release="monitoring-stack"
 deploy-monitor: 
 	- kubectl apply -f k8s/monitor.yaml
 restart-monitor: 
@@ -70,7 +78,8 @@ deploy-locust:
 open-locust: 
 	- kubectl port-forward svc/locust-master 8089:8089
 
-
+test-pod:
+	kubectl run -it busybox --image=busybox --restart=Never -- sh
 tss-build: 
 	minikube -p=thesis image build -t custom-scaling-server:latest ./helper/custom-scaling-server
 tss-deploy: 
