@@ -4,7 +4,7 @@ from utils.payload import random_text
 
 class TextUser(HttpUser):
     abstract = True
-    host = "http://text-service:8080"
+    host = "http://autoscaling-k8s-test"
     wait_time = between(1, 2)
 
     @task(1)

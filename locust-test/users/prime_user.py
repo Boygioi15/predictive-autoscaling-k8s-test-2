@@ -1,9 +1,12 @@
 import os
 import random
 import time
+import logging
 
 import gevent
 from locust import HttpUser, task, constant
+
+logging.basicConfig(level=logging.INFO)
 
 
 def _get_interval(env_name: str, default: float) -> float:
@@ -33,7 +36,7 @@ def _get_int_range(min_env_name: str, max_env_name: str, default_min: int, defau
 
 class PrimeUser(HttpUser):
     abstract = True
-    host = "http://prime-service:8080"
+    host = "http://autoscaling-k8s-test"
     wait_time = constant(0)
 
     range_interval = _get_interval("PRIME_RANGE_INTERVAL", 2.0)
@@ -59,26 +62,29 @@ class PrimeUser(HttpUser):
     @task(1)
     def range_prime(self):
         n = random.randint(self.range_min, self.range_max)
-        self.client.get(
-            f"/prime/range?n={n}",
+        response = self.client.get(
+            f"/api/prime/range?n={n}",
             name="/prime/range"
         )
+        logging.info(f"Range prime result for n={n}: {response.text}")
         self._wait_for_task_interval("range_prime", self.range_interval)
 
     @task(1)
     def kth_prime(self):
         k = random.randint(self.kth_min, self.kth_max)
-        self.client.get(
-            f"/prime/kth?k={k}",
+        response = self.client.get(
+            f"/api/prime/kth?k={k}",
             name="/prime/kth"
         )
+        logging.info(f"Kth prime result for k={k}: {response.text}")
         self._wait_for_task_interval("kth_prime", self.kth_interval)
 
     @task(1)
     def check_prime(self):
         n = random.randint(self.check_min, self.check_max)
-        self.client.get(
-            f"/prime/check?n={n}",
+        response = self.client.get(
+            f"/api/prime/check?n={n}",
             name="/prime/check"
         )
+        logging.info(f"Check prime result for n={n}: {response.text}")
         self._wait_for_task_interval("check_prime", self.check_interval)

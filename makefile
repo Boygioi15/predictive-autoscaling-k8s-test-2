@@ -6,7 +6,7 @@ build-service:
 	minikube -p=thesis image build -t text-service:v1 ./services/text-service
 	minikube -p=thesis image build -t frontend:v1 ./services/frontend
 build-locust: 
-	minikube -p=thesis image build -t locust-test:v1 ./locust-test
+	docker compose build locust-master locust-worker
 start:
 	minikube -p=thesis start --driver=kvm2 --container-runtime=containerd --nodes=1 --cpus=6 --memory=8192
 
@@ -17,16 +17,10 @@ start:
 	- kubectl apply -f k8s/frontend-deployment.yaml
 	- kubectl apply -f k8s/frontend-service.yaml
 
-	# Enable the addon
-	minikube -p=thesis addons enable ingress
-
 	# Wait for the Nginx controller pods to be ready
 	kubectl rollout status deployment ingress-nginx-controller -n ingress-nginx --timeout=90s
 
 	# Now apply your ingress rules
-	kubectl apply -f k8s/ingress-frontend.yaml
-	kubectl apply -f k8s/ingress-backend.yaml
-
 	- kubectl apply -f k8s/ingress-frontend.yaml
 	- kubectl apply -f k8s/ingress-backend.yaml
 
@@ -56,6 +50,13 @@ install-helm-ingress:
 	--set controller.metrics.enabled=true \
 	--set controller.metrics.serviceMonitor.enabled=true \
 	--set controller.metrics.serviceMonitor.additionalLabels.release="monitoring-stack"
+
+# # This ensures metrics, the ServiceMonitor for Prometheus, and stub-status are all ON
+# helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
+#   -n ingress-nginx \
+#   --set controller.metrics.enabled=true \
+#   --set controller.metrics.serviceMonitor.enabled=true \
+#   --set controller.metrics.serviceMonitor.additionalLabels.release="monitoring-stack"
 deploy-monitor: 
 	- kubectl apply -f k8s/monitor.yaml
 restart-monitor: 
@@ -68,15 +69,11 @@ open-prometheus:
 stop:
 	- kubectl port-forward prometheus-monitoring-stack-kube-prom-prometheus-0  9090:9090 -n monitoring
 restart-locust: 
-	- kubectl rollout restart deployment locust-master
-	- kubectl rollout restart deployment locust-worker
+	docker compose restart locust-master locust-worker
 deploy-locust: 
-	- kubectl apply -f k8s/locust/locust-worker.yaml
-	- kubectl apply -f k8s/locust/locust-master.yaml
-	- kubectl apply -f k8s/locust/locust-exporter.yaml
-	- kubectl apply -f k8s/locust/locust-config.yaml
+	docker compose up -d locust-master locust-worker
 open-locust: 
-	- kubectl port-forward svc/locust-master 8089:8089
+	@echo "Locust UI: http://localhost:8089"
 
 test-pod:
 	kubectl run -it busybox --image=busybox --restart=Never -- sh

@@ -1,7 +1,7 @@
 import { Controller, Get, Query, BadRequestException } from '@nestjs/common';
 import { PrimeService } from './prime.service';
 
-@Controller('prime')
+@Controller()
 export class PrimeController {
   // simple in-memory counter for each route
   private static routeCounts = { range: 0, kth: 0, check: 0 };

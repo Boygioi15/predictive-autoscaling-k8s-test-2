@@ -22,14 +22,15 @@ services:
 
   locust-master:
     build:
-      context: ./load-test
+      context: ./locust-test
       dockerfile: Dockerfile
     container_name: locust-master
+    env_file:
+      - ./locust-test/locust.env
     ports:
       - "8089:8089" # Web UI
       - "5557:5557" # Master <-> Worker
       - "5558:5558"
-
     command:
       - -f
       - /mnt/locust/locustfile.py
@@ -38,27 +39,18 @@ services:
 
   locust-worker:
     build:
-      context: ./load-test
+      context: ./locust-test
       dockerfile: Dockerfile
     container_name: locust-worker
+    env_file:
+      - ./locust-test/locust.env
     depends_on:
       - locust-master
-
     command:
       - -f
       - /mnt/locust/locustfile.py
       - --worker
       - --master-host=locust-master
-
-  locust-exporter:
-    image: containersol/locust_exporter
-    container_name: locust-exporter
-    ports:
-      - "9646:9646"
-    environment:
-      - LOCUST_EXPORTER_URI=http://locust-master:8089
-    depends_on:
-      - locust-master
 
   prometheus:
     image: prom/prometheus:latest
@@ -87,7 +79,7 @@ services:
     depends_on:
       - prometheus
     environment:
-      - PROMETHEUS_URL = http://prometheus:9090
+      - PROMETHEUS_URL=http://prometheus:9090
     volumes:
       - ./ai-model/data:/app/data
 
