@@ -1,6 +1,7 @@
 import os
 import math
 import logging
+import datetime
 from locust import LoadTestShape
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,6 @@ class ScenarioShape(LoadTestShape):
             current_time = 0
             active_scenario = None
             scenario_run_time = 0
-            
             for item in self.playlist:
                 if run_time < current_time + item['duration_secs']:
                     active_scenario = item['scenario']
@@ -102,6 +102,7 @@ class ScenarioShape(LoadTestShape):
             return self.get_scenario_tick(self.scenario, run_time)
 
     def get_scenario_tick(self, scenario_name, run_time):
+        print(f"[{datetime.datetime.now()}] Active scenario: {scenario_name}")
         if scenario_name == "none":
             # Manual mode: return None to disable automatic load management
             # Users can be controlled manually via the Locust web UI
