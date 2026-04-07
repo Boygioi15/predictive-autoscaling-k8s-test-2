@@ -10,7 +10,7 @@ export class PrimeController {
 
   // API 1: /prime/range?n=100000
   @Get('range')
-  getPrimesCountInRange(@Query('n') n: string) {
+  async getPrimesCountInRange(@Query('n') n: string) {
     // increment and log counter
     PrimeController.routeCounts.range++;
     console.log(`[prime/range] called ${PrimeController.routeCounts.range} times with n=${n}`);
@@ -21,8 +21,7 @@ export class PrimeController {
 
     const start = Date.now();
 
-    // Gọi hàm đếm thay vì hàm tìm mảng
-    const count = this.primeService.countPrimesInRange(num);
+    const count = await this.primeService.countPrimesInRange(num);
 
     const end = Date.now();
     return {
@@ -34,7 +33,7 @@ export class PrimeController {
 
   // API 2: /prime/kth (Giữ nguyên)
   @Get('kth')
-  getKthPrime(@Query('k') k: string) {
+  async getKthPrime(@Query('k') k: string) {
     PrimeController.routeCounts.kth++;
     console.log(`[prime/kth] called ${PrimeController.routeCounts.kth} times with k=${k}`);
 
@@ -43,7 +42,7 @@ export class PrimeController {
       throw new BadRequestException('K phải là số dương > 0');
 
     const start = Date.now();
-    const result = this.primeService.findKthPrime(num);
+    const result = await this.primeService.findKthPrime(num);
     const end = Date.now();
 
     return {
@@ -55,7 +54,7 @@ export class PrimeController {
 
   // API 3: /prime/check (Giữ nguyên)
   @Get('check')
-  checkPrime(@Query('n') n: string) {
+  async checkPrime(@Query('n') n: string) {
     PrimeController.routeCounts.check++;
     console.log(`[prime/check] called ${PrimeController.routeCounts.check} times with n=${n}`);
 
