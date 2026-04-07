@@ -2,11 +2,19 @@ import os
 import random
 import time
 import logging
+import csv
+import json
 
 import gevent
 from locust import HttpUser, task, constant
+from gevent.lock import Semaphore
 
 logging.basicConfig(level=logging.INFO)
+
+CSV_LOG_PATH = os.getenv("PRIME_CSV_LOG_PATH", "./request-log.csv")
+CSV_DEBOUNCE_SECONDS = 0.01
+CSV_DEFAULT_TIME_TAKEN = "5"
+_csv_lock = Semaphore()
 
 
 def _get_interval(env_name: str, default: float) -> float:
@@ -33,6 +41,33 @@ def _get_int_range(min_env_name: str, max_env_name: str, default_min: int, defau
         return max_value, min_value
 
     return min_value, max_value
+
+
+def _extract_csv_values(response_text: str):
+    try:
+        payload = json.loads(response_text)
+    except json.JSONDecodeError:
+        return response_text, CSV_DEFAULT_TIME_TAKEN
+
+    value = payload
+    for key in ("result", "totalPrimesFound", "isPrime", "message"):
+        if key in payload:
+            value = payload[key]
+            break
+
+    time_taken = str(payload.get("timeTaken", CSV_DEFAULT_TIME_TAKEN)).replace("ms", "").strip() or CSV_DEFAULT_TIME_TAKEN
+    return value, time_taken
+
+
+def _append_csv_row(path: str, value, time_taken: str):
+    with _csv_lock:
+        gevent.sleep(CSV_DEBOUNCE_SECONDS)
+        file_exists = os.path.exists(CSV_LOG_PATH)
+        with open(CSV_LOG_PATH, "a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            if not file_exists:
+                writer.writerow(["path", "value", "timeTaken"])
+            writer.writerow([path, value, time_taken])
 
 class PrimeUser(HttpUser):
     abstract = True
@@ -66,7 +101,8 @@ class PrimeUser(HttpUser):
             f"/api/prime/range?n={n}",
             name="/prime/range"
         )
-        logging.info(f"Range prime result for n={n}: {response.text}")
+        value, time_taken = _extract_csv_values(response.text)
+        _append_csv_row("/prime/range", value, time_taken)
         self._wait_for_task_interval("range_prime", self.range_interval)
 
     @task(1)
@@ -76,7 +112,8 @@ class PrimeUser(HttpUser):
             f"/api/prime/kth?k={k}",
             name="/prime/kth"
         )
-        logging.info(f"Kth prime result for k={k}: {response.text}")
+        value, time_taken = _extract_csv_values(response.text)
+        _append_csv_row("/prime/kth", value, time_taken)
         self._wait_for_task_interval("kth_prime", self.kth_interval)
 
     @task(1)
@@ -86,5 +123,6 @@ class PrimeUser(HttpUser):
             f"/api/prime/check?n={n}",
             name="/prime/check"
         )
-        logging.info(f"Check prime result for n={n}: {response.text}")
+        value, time_taken = _extract_csv_values(response.text)
+        _append_csv_row("/prime/check", value, time_taken)
         self._wait_for_task_interval("check_prime", self.check_interval)
