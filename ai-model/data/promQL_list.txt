@@ -12,6 +12,9 @@ abs(sum(irate(http_request_duration_seconds_count[1m]))-sum(irate(nginx_ingress_
 histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service="prime-service"}[1m])))
 histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service="prime-service"}[2m])))
 histogram_quantile(0.99, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress="ingress-backend"}[1m])))
+histogram_quantile(0.50, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress="ingress-backend"}[2m])))
+histogram_quantile(0.75, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress="ingress-backend"}[2m])))
+histogram_quantile(0.95, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress="ingress-backend"}[2m])))
 histogram_quantile(0.99, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress="ingress-backend"}[2m])))
 nginx_ingress_controller_nginx_process_connections{state=~"active|writing"}
 abs(histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service="prime-service"}[1m])))-histogram_quantile(0.95, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress="ingress-backend"}[1m]))))
