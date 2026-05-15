@@ -14,7 +14,7 @@ start:
 	- kubectl apply -f k8s/prime-service.yaml
 	- kubectl apply -f k8s/text-deployment.yaml
 	- kubectl apply -f k8s/text-service.yaml
-	- kubectl apply -f k8s/frontend-deployment.yaml
+	- kubectl apply -f k8s/frontend-deployment.yaml 
 	- kubectl apply -f k8s/frontend-service.yaml
 
 	# Wait for the Nginx controller pods to be ready
@@ -24,6 +24,8 @@ start:
 	- kubectl apply -f k8s/ingress-frontend.yaml
 	- kubectl apply -f k8s/ingress-backend.yaml
 
+
+	#remember to change expose the ingress-nginx-controller svc. -- kubectl get svc -n ingress-nginx
 deploy-service: 
 	- kubectl apply -f k8s/prime-deployment.yaml
 	- kubectl apply -f k8s/prime-service.yaml

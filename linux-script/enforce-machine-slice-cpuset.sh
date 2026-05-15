@@ -2,7 +2,7 @@
 
 # --- CONFIGURATION ---
 CGROUP_PATH="/sys/fs/cgroup/machine.slice"
-CPU_RANGE="10-15"
+CPU_RANGE="8-15"
 
 # 1. Enable controllers in the ROOT & machine.slice
 echo "+cpuset +cpu" | sudo tee /sys/fs/cgroup/cgroup.subtree_control > /dev/null

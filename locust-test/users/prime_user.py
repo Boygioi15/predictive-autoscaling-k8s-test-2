@@ -72,7 +72,7 @@ def _append_csv_row(path: str, value, time_taken: str):
 class PrimeUser(HttpUser):
     abstract = True
     host = "http://autoscaling-k8s-test"
-    wait_time = constant(0)
+    wait_time = constant(1)
 
     range_interval = _get_interval("PRIME_RANGE_INTERVAL", 2.0)
     kth_interval = _get_interval("PRIME_KTH_INTERVAL", 2.0)
@@ -103,7 +103,7 @@ class PrimeUser(HttpUser):
         )
         value, time_taken = _extract_csv_values(response.text)
         _append_csv_row("/prime/range", value, time_taken)
-        self._wait_for_task_interval("range_prime", self.range_interval)
+        # self._wait_for_task_interval("range_prime", self.range_interval)
 
     @task(1)
     def kth_prime(self):
@@ -114,7 +114,7 @@ class PrimeUser(HttpUser):
         )
         value, time_taken = _extract_csv_values(response.text)
         _append_csv_row("/prime/kth", value, time_taken)
-        self._wait_for_task_interval("kth_prime", self.kth_interval)
+        # self._wait_for_task_interval("kth_prime", self.kth_interval)
 
     @task(1)
     def check_prime(self):
@@ -125,4 +125,4 @@ class PrimeUser(HttpUser):
         )
         value, time_taken = _extract_csv_values(response.text)
         _append_csv_row("/prime/check", value, time_taken)
-        self._wait_for_task_interval("check_prime", self.check_interval)
+        # self._wait_for_task_interval("check_prime", self.check_interval)
