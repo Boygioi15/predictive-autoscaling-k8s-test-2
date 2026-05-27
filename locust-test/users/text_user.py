@@ -1,26 +1,16 @@
 from locust import HttpUser, task, between
-import random
-from utils.payload import random_text
+
+from workload import DEFAULT_TARGET_HOST, analyze_text_request, transform_text_request
 
 class TextUser(HttpUser):
     abstract = True
-    host = "http://autoscaling-k8s-test"
+    host = DEFAULT_TARGET_HOST
     wait_time = between(1, 2)
 
     @task(1)
     def analyze_text(self):
-        text = random_text(1000)
-        self.client.post(
-            "/text/analyze",
-            json={"text": text},
-            name="/text/analyze"
-        )
+        analyze_text_request(self.client)
 
     @task(1)
     def transform_text(self):
-        text = random_text(200)
-        self.client.post(
-            "/text/transform?rounds=50",
-            json={"text": text},
-            name="/text/transform"
-        )
+        transform_text_request(self.client)

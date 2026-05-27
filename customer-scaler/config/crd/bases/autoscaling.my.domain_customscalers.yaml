@@ -42,8 +42,19 @@ spec:
               deploymentName:
                 description: Name of the Deployment to scale
                 type: string
+              intervalMinutes:
+                description: Polling interval in minutes. Defaults to 1 minute when
+                  omitted or invalid.
+                type: integer
+              prometheusQuery:
+                description: Optional Prometheus query override forwarded to the forecasting
+                  service.
+                type: string
+              targetMetricName:
+                description: Optional metric name forwarded to the forecasting service.
+                type: string
               url:
-                description: The external endpoint to poll (e.g., http://localhost:1208)
+                description: The forecasting service endpoint to call.
                 type: string
             required:
             - deploymentName

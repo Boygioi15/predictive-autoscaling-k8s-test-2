@@ -3,9 +3,19 @@
 **
 
 # Re-include Go source files (but not *_test.go)
+!cmd/
+!cmd/**
+!api/
+!api/**
+!internal/
+!internal/**
 !**/*.go
 **/*_test.go
 
 # Re-include Go module files
 !go.mod
 !go.sum
+
+# Re-include build files required by Docker/Minikube builds
+!Dockerfile
+!.dockerignore

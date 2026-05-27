@@ -1,8 +1,18 @@
 # customer-scaler
-// TODO(user): Add simple overview of use/purpose
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+Kubernetes custom operator that periodically calls an external forecasting HTTP service and scales a target Deployment to the returned replica count. The operator requeues each `CustomScaler` resource based on its configured `intervalMinutes`, so every scaler can poll on its own cadence.
+
+Sample `CustomScaler` spec:
+
+```yaml
+spec:
+  url: http://forecasting-service.default.svc.cluster.local:8010/predict-workload
+  deploymentName: prime-service-deployment
+  intervalMinutes: 1
+  prometheusQuery: 'sum(rate(http_requests_total{job="prime-service"}[2m]))'
+  targetMetricName: requests_per_second
+```
 
 ## Getting Started
 
@@ -132,4 +142,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-

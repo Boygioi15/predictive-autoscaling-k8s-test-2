@@ -25,10 +25,16 @@ import (
 
 // CustomScalerSpec defines the desired state of CustomScaler
 type CustomScalerSpec struct {
-	// The external endpoint to poll (e.g., http://localhost:1208)
+	// The forecasting service endpoint to call.
 	URL string `json:"url"`
 	// Name of the Deployment to scale
 	DeploymentName string `json:"deploymentName"`
+	// Polling interval in minutes. Defaults to 1 minute when omitted or invalid.
+	IntervalMinutes int `json:"intervalMinutes,omitempty"`
+	// Optional Prometheus query override forwarded to the forecasting service.
+	PrometheusQuery string `json:"prometheusQuery,omitempty"`
+	// Optional metric name forwarded to the forecasting service.
+	TargetMetricName string `json:"targetMetricName,omitempty"`
 }
 
 type CustomScalerStatus struct {

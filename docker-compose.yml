@@ -20,37 +20,18 @@ services:
       - prime-service
       - text-service
 
-  locust-master:
+  locust:
     build:
       context: ./locust-test
       dockerfile: Dockerfile
-    container_name: locust-master
+    container_name: locust
     env_file:
       - ./locust-test/locust.env
     ports:
-      - "8089:8089" # Web UI
-      - "5557:5557" # Master <-> Worker
-      - "5558:5558"
-    command:
-      - -f
-      - /mnt/locust/locustfile.py
-      - --master
-      - --web-host=0.0.0.0
-
-  locust-worker:
-    build:
-      context: ./locust-test
-      dockerfile: Dockerfile
-    container_name: locust-worker
-    env_file:
-      - ./locust-test/locust.env
-    depends_on:
-      - locust-master
-    command:
-      - -f
-      - /mnt/locust/locustfile.py
-      - --worker
-      - --master-host=locust-master
+      - "8089:8089"
+    entrypoint:
+      - sh
+      - /mnt/locust/start-locust.sh
 
   prometheus:
     image: prom/prometheus:latest

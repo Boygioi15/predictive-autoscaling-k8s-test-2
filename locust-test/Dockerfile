@@ -8,7 +8,8 @@ WORKDIR /mnt/locust
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy toàn bộ code (bao gồm folder users và locustfile.py) vào container
+# Copy startup script with execute permission, then the rest of the test files.
+COPY --chmod=755 start-locust.sh /mnt/locust/start-locust.sh
 COPY . .
 
 # (Tùy chọn) Command mặc định khi chạy container

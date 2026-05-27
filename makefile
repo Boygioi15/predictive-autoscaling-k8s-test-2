@@ -6,7 +6,9 @@ build-service:
 	minikube -p=thesis image build -t text-service:v1 ./services/text-service
 	minikube -p=thesis image build -t frontend:v1 ./services/frontend
 build-locust: 
-	docker compose build locust-master locust-worker
+	docker compose build locust
+build-forecasting-service: 
+	minikube -p=thesis image build -t forecasting-service:v1 ./forecasting-service
 start:
 	minikube -p=thesis start --driver=kvm2 --container-runtime=containerd --nodes=1 --cpus=6 --memory=8192
 
@@ -35,6 +37,12 @@ deploy-service:
 	- kubectl apply -f k8s/frontend-service.yaml
 	- kubectl apply -f k8s/ingress-frontend.yaml
 	- kubectl apply -f k8s/ingress-backend.yaml
+deploy-forecasting-service:
+	- kubectl apply -f ./k8s/forecasting-service.yaml
+restart-forecasting-service:
+	- kubectl apply -f k8s/forecasting-service.yaml
+	- kubectl rollout restart deployment/forecasting-service-deployment
+	- kubectl logs deploy/forecasting-service-deployment
 restart-service: 
 	- kubectl rollout restart deployment prime-service-deployment
 	- kubectl rollout restart deployment text-service-deployment
@@ -68,12 +76,10 @@ open-grafana:
 	- kubectl port-forward svc/monitoring-stack-grafana 3000:80 -n monitoring
 open-prometheus: 
 	- kubectl port-forward prometheus-monitoring-stack-kube-prom-prometheus-0  9090:9090 -n monitoring
-stop:
-	- kubectl port-forward prometheus-monitoring-stack-kube-prom-prometheus-0  9090:9090 -n monitoring
 restart-locust: 
-	docker compose restart locust-master locust-worker
+	docker compose restart locust
 deploy-locust: 
-	docker compose up -d locust-master locust-worker
+	docker compose up -d locust
 open-locust: 
 	@echo "Locust UI: http://localhost:8089"
 
@@ -87,8 +93,8 @@ tss-deploy:
 #### 2. Makefile for managing Minikube cluster and services with cgroup adjustments
 start-environment: 
 	$(MAKE)	start
-	bash ./linux-script/enforce-machine-slice-cpuset.sh
-	bash ./linux-script/lock-cpu-frequency.sh
+# 	bash ./linux-script/enforce-machine-slice-cpuset.sh
+# 	bash ./linux-script/lock-cpu-frequency.sh
 stop-environment: 
 	minikube -p=thesis stop
 	bash ./linux-script/release-cpu-frequency.sh

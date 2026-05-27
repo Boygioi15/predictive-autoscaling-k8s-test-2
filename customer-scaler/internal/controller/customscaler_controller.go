@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -44,6 +45,7 @@ type CustomScalerReconciler struct {
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -63,25 +65,57 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// 2. Observe: Call the HTTP Endpoint
-	resp, err := http.Get(customScaler.Spec.URL)
+	requeueAfter := pollingInterval(customScaler.Spec.IntervalMinutes)
+	log.Info(
+		"Starting forecast polling cycle",
+		"url", customScaler.Spec.URL,
+		"deployment", customScaler.Spec.DeploymentName,
+		"interval", requeueAfter.String(),
+	)
+
+	// 2. Observe: Call the forecasting service endpoint
+	body, err := buildForecastRequestBody(&customScaler)
 	if err != nil {
-		log.Error(err, "Failed to fetch value from endpoint")
-		return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+		log.Error(err, "Failed to build forecasting request")
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+
+	log.Info(
+		"Calling forecasting service",
+		"url", customScaler.Spec.URL,
+		"payload", string(body),
+	)
+
+	resp, err := http.Post(customScaler.Spec.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Error(err, "Failed to call forecasting service")
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error(err, "Failed to read response body")
-		return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		responseBody, _ := io.ReadAll(resp.Body)
+		log.Error(nil, "Forecasting service returned non-success status", "statusCode", resp.StatusCode, "body", string(responseBody))
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Error(err, "Failed to read forecasting service response")
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+
+	log.Info(
+		"Forecasting service response received",
+		"statusCode", resp.StatusCode,
+		"body", string(responseBody),
+	)
+
 	// Convert response to integer, allowing either a plain number or JSON payload.
-	val, err := parseReplicaValue(body)
+	val, err := parseReplicaValue(responseBody)
 	if err != nil {
 		log.Error(err, "Response was not a valid replica count")
-		return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	// 3. Analyze & Act: Find the Target Deployment
@@ -90,13 +124,18 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if err := r.Get(ctx, depName, &deployment); err != nil {
 		log.Error(err, "Failed to find target deployment")
-		return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	// Update replicas if they don't match the endpoint value
 	desiredReplicas := int32(val)
-	if *deployment.Spec.Replicas != desiredReplicas {
-		log.Info("Scaling deployment", "Old", *deployment.Spec.Replicas, "New", desiredReplicas)
+	currentReplicas := int32(1)
+	if deployment.Spec.Replicas != nil {
+		currentReplicas = *deployment.Spec.Replicas
+	}
+
+	if currentReplicas != desiredReplicas {
+		log.Info("Scaling deployment", "Old", currentReplicas, "New", desiredReplicas)
 		deployment.Spec.Replicas = &desiredReplicas
 		if err := r.Update(ctx, &deployment); err != nil {
 			return ctrl.Result{}, err
@@ -105,11 +144,22 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// Update Status with the last value we saw
 	customScaler.Status.LastValue = val
-	r.Status().Update(ctx, &customScaler)
+	customScaler.Status.CurrentReplicas = desiredReplicas
+	if err := r.Status().Update(ctx, &customScaler); err != nil {
+		log.Error(err, "Failed to update custom scaler status")
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
 
-	// Requeue every 15 seconds to check the endpoint again
-	return ctrl.Result{RequeueAfter: time.Second * 15}, nil
+	log.Info(
+		"Forecast polling cycle completed",
+		"deployment", customScaler.Spec.DeploymentName,
+		"replica", desiredReplicas,
+		"nextRunIn", requeueAfter.String(),
+	)
+
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
+
 func parseReplicaValue(body []byte) (int, error) {
 	var response struct {
 		Replica *int `json:"replica"`
@@ -121,6 +171,30 @@ func parseReplicaValue(body []byte) (int, error) {
 
 	trimmed := strings.TrimSpace(string(body))
 	return strconv.Atoi(trimmed)
+}
+
+func pollingInterval(intervalMinutes int) time.Duration {
+	if intervalMinutes <= 0 {
+		intervalMinutes = 1
+	}
+
+	return time.Duration(intervalMinutes) * time.Minute
+}
+
+func buildForecastRequestBody(customScaler *autoscalingv1.CustomScaler) ([]byte, error) {
+	requestBody := map[string]any{
+		"deployment_name": customScaler.Spec.DeploymentName,
+	}
+
+	if customScaler.Spec.PrometheusQuery != "" {
+		requestBody["prometheus_query"] = customScaler.Spec.PrometheusQuery
+	}
+
+	if customScaler.Spec.TargetMetricName != "" {
+		requestBody["target_metric_name"] = customScaler.Spec.TargetMetricName
+	}
+
+	return json.Marshal(requestBody)
 }
 
 // SetupWithManager sets up the controller with the Manager.
