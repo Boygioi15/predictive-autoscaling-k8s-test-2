@@ -322,6 +322,76 @@ That is not recommended for this use case because it changes the meaning of the 
 
 So the safe path is acceptable for experiments, but true non-waiting would no longer be a normal Locust HTTP test.
 
+## Full Response Removal Experiment
+
+We also tried the more extreme experiment:
+
+- completely remove response waiting
+- treat a request as "done" as soon as the client writes the request bytes
+
+The implementation replaced the pooled HTTP client with a raw socket send-only path.
+
+What happened:
+
+- each request opened a brand-new socket
+- each request did a brand-new TCP connect
+- request bytes were written once
+- the socket was closed immediately
+- no connection reuse remained
+
+This introduced a worse bottleneck:
+
+- connection churn
+- repeated TCP setup cost
+- much heavier pressure on the network stack
+- likely more stress from ephemeral ports, connection teardown, and ingress accept behavior
+
+The result was not better throughput. It trailed off harder and even produced transport-level errors such as:
+
+- `OSError: [Errno 101] Network is unreachable`
+
+So the experiment showed that removing response waiting in a naive raw-socket way does not solve the problem. It simply replaces one bottleneck with another, often worse one.
+
+The better design is:
+
+- keep connection reuse
+- keep the efficient pooled HTTP transport
+- reduce unnecessary response-body handling if needed
+
+That is why the branch was moved back toward the pooled `FastHttpSession` path rather than keeping the raw send-only socket approach.
+
+## Response-Time Coupling
+
+Another important conclusion is that request throughput can become limited by the response time of the server.
+
+In the current worker-pool design:
+
+- one worker starts one request
+- that worker stays occupied until the request completes
+- only then can it pull another queued job
+
+So if server responses slow down:
+
+- more workers remain occupied
+- fewer workers are available for new requests
+- the queue grows
+- Locust can drift away from the intended script shape
+
+This means the request generator is not perfectly open-loop under heavy load. It becomes coupled to server response time.
+
+The practical implication is:
+
+- if response time is high enough, the load test may fail to reproduce the intended request shape exactly
+
+This is not necessarily a flaw in the thesis, as long as the deviation is measured explicitly and reported honestly.
+
+The defense is:
+
+- the CSV defines the target demand shape
+- Locust is the mechanism used to approximate that shape
+- when the generated shape deviates, the mismatch is itself an experimental result
+- the comparison between script, Locust, and ingress makes that deviation observable
+
 ## Distributed Locust
 
 We also discussed master/worker architecture.
@@ -379,3 +449,35 @@ This gives a workable setup for:
 - run-relative comparison
 - ingress-based verification
 - diagnosing whether mismatch comes from scheduling, queueing, or server response time
+
+## Remaining Pathways
+
+At this point, the Locust test design is in a good state and the remaining bottleneck question has been narrowed down to two practical paths:
+
+1. Increase concurrency
+   - Keep the current Locust architecture
+   - Raise `SCRIPT_CONCURRENCY`
+   - Check whether the gap between `dispatched` and `started` shrinks
+   - This is the cleaner path if the issue is simply too few in-flight slots
+
+2. Remove response waiting
+   - Move closer to a pure request sender rather than a normal Locust HTTP-response model
+   - This would test whether server-response waiting is the dominant limiter
+   - This is more experimental and changes the meaning of the load generator
+
+These two paths are now the main unresolved branch point for further exploration.
+
+## Status
+
+This phase is considered done.
+
+What has been achieved:
+
+- a CSV-driven scripted Locust architecture
+- a clear planner / scheduler / dispatcher split
+- Locust-side and ingress-side verification
+- run metadata for wall-clock alignment
+- better progress counters for diagnosing bottlenecks
+- a narrowed performance diagnosis centered on concurrency saturation vs response waiting
+
+This provides a solid stopping point before moving on to the next problem.
