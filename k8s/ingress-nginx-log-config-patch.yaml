@@ -1,0 +1,9 @@
+data:
+  log-format-escape-json: "true"
+  access-log-params: "buffer=16k flush=1s"
+  log-format-upstream: >-
+    {"time":"$time_iso8601","path":"$uri","query":"$args","status":$status,"request_time":$request_time,"locust_script_timestamp":"$http_x_locust_script_timestamp","locust_dispatch_time":"$http_x_locust_dispatch_time"}
+    
+    
+    
+#{"time":"$time_iso8601","request_id":"$req_id","namespace":"$namespace","ingress":"$ingress_name","service":"$service_name","method":"$request_method","path":"$uri","query":"$args","status":$status,"request_time":$request_time,"locust_script_timestamp":"$http_x_locust_script_timestamp","locust_dispatch_time":"$http_x_locust_dispatch_time","locust_operation":"$http_x_locust_operation"}

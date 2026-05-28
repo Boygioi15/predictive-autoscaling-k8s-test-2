@@ -1,9 +1,11 @@
 import csv
-import json
 import logging
 import os
 import random
+from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Protocol
 
 import gevent
@@ -14,9 +16,7 @@ from utils.payload import random_text
 logger = logging.getLogger(__name__)
 
 DEFAULT_TARGET_HOST = os.getenv("TARGET_HOST", "http://autoscaling-k8s-test")
-CSV_LOG_PATH = os.getenv("PRIME_CSV_LOG_PATH", "./request-log.csv")
-CSV_DEBOUNCE_SECONDS = 0.01
-CSV_DEFAULT_TIME_TAKEN = "5"
+CSV_LOG_PATH = os.getenv("REQUEST_LOG_PATH", "./request-log.csv")
 REQUEST_CSV_LOG_ENABLED = os.getenv("REQUEST_CSV_LOG_ENABLED", "true").strip().lower() in {
     "1",
     "true",
@@ -24,6 +24,8 @@ REQUEST_CSV_LOG_ENABLED = os.getenv("REQUEST_CSV_LOG_ENABLED", "true").strip().l
     "on",
 }
 _csv_lock = Semaphore()
+_request_counts: dict[tuple[str, str], int] = defaultdict(int)
+_flushed_keys: set[tuple[str, str]] = set()
 
 
 class RequestClient(Protocol):
@@ -59,71 +61,109 @@ def _get_int_range(min_env_name: str, max_env_name: str, default_min: int, defau
     return min_value, max_value
 
 
-def _extract_csv_values(response_text: str) -> tuple[object, str]:
-    try:
-        payload = json.loads(response_text)
-    except json.JSONDecodeError:
-        return response_text, CSV_DEFAULT_TIME_TAKEN
+def _record_request(url: str, time_sent: str) -> None:
+    second_bucket = time_sent[:19] + "Z"
 
-    value = payload
-    for key in ("result", "totalPrimesFound", "isPrime", "message"):
-        if key in payload:
-            value = payload[key]
-            break
-
-    time_taken = str(payload.get("timeTaken", CSV_DEFAULT_TIME_TAKEN)).replace("ms", "").strip()
-    return value, time_taken or CSV_DEFAULT_TIME_TAKEN
-
-
-def _append_csv_row(log_path: str, path: str, value: object, time_taken: str) -> None:
     with _csv_lock:
-        gevent.sleep(CSV_DEBOUNCE_SECONDS)
-        file_exists = os.path.exists(log_path)
-        with open(log_path, "a", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            if not file_exists:
-                writer.writerow(["path", "value", "timeTaken"])
-            writer.writerow([path, value, time_taken])
+        _request_counts[(second_bucket, url)] += 1
+
+
+def reset_request_logs(log_path: str = CSV_LOG_PATH) -> None:
+    with _csv_lock:
+        _request_counts.clear()
+        _flushed_keys.clear()
+
+    log_file = Path(log_path)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["second", "url", "count"])
+
+
+def flush_request_logs(log_path: str = CSV_LOG_PATH, final: bool = False) -> None:
+    with _csv_lock:
+        current_second = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        rows_to_flush = []
+        for key, count in sorted(_request_counts.items()):
+            second_bucket, url = key
+            if key in _flushed_keys:
+                continue
+            if not final and second_bucket >= current_second:
+                continue
+            rows_to_flush.append((second_bucket, url, int(count)))
+            _flushed_keys.add(key)
+
+    if not rows_to_flush:
+        return
+
+    log_file = Path(log_path)
+    with log_file.open("a", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        for second_bucket, url, count in rows_to_flush:
+            writer.writerow([second_bucket, url, count])
+
+
+def _request_and_log(client: RequestClient, method: str, url: str, **kwargs):
+    time_sent = datetime.now(timezone.utc).isoformat()
+    if REQUEST_CSV_LOG_ENABLED:
+        _record_request(url, time_sent)
+    request_method = getattr(client, method)
+    return request_method(url, **kwargs)
 
 
 def range_prime_request(client: RequestClient, headers: dict[str, str] | None = None):
     range_min, range_max = _get_int_range("PRIME_RANGE_MIN", "PRIME_RANGE_MAX", 1_000, 500_000)
     n = random.randint(range_min, range_max)
-    response = client.get(f"/api/prime/range?n={n}", name="/prime/range", headers=headers)
-    if REQUEST_CSV_LOG_ENABLED:
-        value, time_taken = _extract_csv_values(response.text)
-        _append_csv_row(CSV_LOG_PATH, "/prime/range", value, time_taken)
-    return response
+    return _request_and_log(
+        client,
+        "get",
+        f"/api/prime/range?n={n}",
+        name="/prime/range",
+        headers=headers,
+    )
 
 
 def kth_prime_request(client: RequestClient, headers: dict[str, str] | None = None):
     kth_min, kth_max = _get_int_range("PRIME_KTH_MIN", "PRIME_KTH_MAX", 1_000, 50_000)
     k = random.randint(kth_min, kth_max)
-    response = client.get(f"/api/prime/kth?k={k}", name="/prime/kth", headers=headers)
-    if REQUEST_CSV_LOG_ENABLED:
-        value, time_taken = _extract_csv_values(response.text)
-        _append_csv_row(CSV_LOG_PATH, "/prime/kth", value, time_taken)
-    return response
+    return _request_and_log(
+        client,
+        "get",
+        f"/api/prime/kth?k={k}",
+        name="/prime/kth",
+        headers=headers,
+    )
 
 
 def check_prime_request(client: RequestClient, headers: dict[str, str] | None = None):
     check_min, check_max = _get_int_range("PRIME_CHECK_MIN", "PRIME_CHECK_MAX", 5_000_000, 100_000_000)
     n = random.randint(check_min, check_max)
-    response = client.get(f"/api/prime/check?n={n}", name="/prime/check", headers=headers)
-    if REQUEST_CSV_LOG_ENABLED:
-        value, time_taken = _extract_csv_values(response.text)
-        _append_csv_row(CSV_LOG_PATH, "/prime/check", value, time_taken)
-    return response
+    return _request_and_log(
+        client,
+        "get",
+        f"/api/prime/check?n={n}",
+        name="/prime/check",
+        headers=headers,
+    )
 
 
 def analyze_text_request(client: RequestClient, headers: dict[str, str] | None = None):
     text = random_text(1000)
-    return client.post("/text/analyze", json={"text": text}, name="/text/analyze", headers=headers)
+    return _request_and_log(
+        client,
+        "post",
+        "/text/analyze",
+        json={"text": text},
+        name="/text/analyze",
+        headers=headers,
+    )
 
 
 def transform_text_request(client: RequestClient, headers: dict[str, str] | None = None):
     text = random_text(200)
-    return client.post(
+    return _request_and_log(
+        client,
+        "post",
         "/text/transform?rounds=50",
         json={"text": text},
         name="/text/transform",

@@ -67,6 +67,10 @@ install-helm-ingress:
 #   --set controller.metrics.enabled=true \
 #   --set controller.metrics.serviceMonitor.enabled=true \
 #   --set controller.metrics.serviceMonitor.additionalLabels.release="monitoring-stack"
+configure-ingress-logging:
+	kubectl patch configmap ingress-nginx-controller -n ingress-nginx --type merge --patch-file k8s/ingress-nginx-log-config-patch.yaml
+	kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx
+	kubectl rollout status deployment ingress-nginx-controller -n ingress-nginx --timeout=90s
 deploy-monitor: 
 	- kubectl apply -f k8s/monitor.yaml
 restart-monitor: 
@@ -82,6 +86,12 @@ deploy-locust:
 	docker compose up -d locust
 open-locust: 
 	@echo "Locust UI: http://localhost:8089"
+ingress-request-counts:
+	python3 helper/summarize_ingress_logs.py --input shares/ingress_raw.log --output shares/ingress_request_report.csv
+capture-ingress-raw-logs:
+	sh helper/capture_ingress_raw_logs.sh shares/ingress_raw.log
+watch-ingress-request-counts:
+	sh helper/watch_ingress_request_counts.sh ingress-backend shares/ingress_request_report.csv
 
 test-pod:
 	kubectl run -it busybox --image=busybox --restart=Never -- sh

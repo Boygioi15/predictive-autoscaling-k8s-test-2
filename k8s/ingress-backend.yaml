@@ -5,6 +5,7 @@ metadata:
   annotations:
     # Logic Rewrite giữ nguyên cho Backend
     nginx.ingress.kubernetes.io/rewrite-target: /$1
+    nginx.ingress.kubernetes.io/enable-access-log: "true"
 spec:
   rules:
     - host: autoscaling-k8s-test # (Hoặc my-app.local tùy bạn chọn)

@@ -3,8 +3,7 @@ import logging
 import os
 import time
 import uuid
-from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import gevent
@@ -13,11 +12,13 @@ from gevent.lock import Semaphore
 from locust import User, constant, events, task
 from locust.clients import HttpSession
 
-from workload import DEFAULT_TARGET_HOST, build_script_operation_cycle
+from workload import DEFAULT_TARGET_HOST, build_script_operation_cycle, flush_request_logs, reset_request_logs
 
 logger = logging.getLogger(__name__)
 
 _active_scheduler = None
+
+RUN_METADATA_PATH = os.getenv("RUN_METADATA_PATH", "../shares/locust_run_metadata.csv")
 
 
 def _script_web_ui_enabled() -> bool:
@@ -61,23 +62,11 @@ class ScriptScheduler:
         else:
             self.script_path = Path(__file__).resolve().parent / configured_path
 
-        self.start_time = _parse_timestamp(os.getenv("SCRIPT_START_TIME", ""), "SCRIPT_START_TIME")
-        self.end_time = _parse_timestamp(os.getenv("SCRIPT_END_TIME", ""), "SCRIPT_END_TIME")
-        if self.end_time < self.start_time:
-            raise ValueError("SCRIPT_END_TIME must be greater than or equal to SCRIPT_START_TIME")
-
         self.dispatch_mode = os.getenv("SCRIPT_DISPATCH_MODE", "spread").strip().lower()
         if self.dispatch_mode not in {"spread", "burst"}:
             raise ValueError("SCRIPT_DISPATCH_MODE must be either 'spread' or 'burst'")
+        self.request_log_flush_interval = max(1, int(os.getenv("REQUEST_LOG_FLUSH_INTERVAL_SEC", "60")))
 
-        self.progress_log_interval = int(os.getenv("SCRIPT_PROGRESS_LOG_INTERVAL", "10"))
-        self.metrics_flush_interval = max(1, int(os.getenv("SCRIPT_METRICS_FLUSH_INTERVAL_SEC", "60")))
-        self.script_metrics_path = Path(
-            os.getenv("SCRIPT_METRICS_PATH", Path(__file__).resolve().parent / "script-metrics.csv")
-        )
-        self.wall_metrics_path = Path(
-            os.getenv("SCRIPT_WALL_METRICS_PATH", Path(__file__).resolve().parent / "script-wall-metrics.csv")
-        )
         self.client = HttpSession(
             base_url=os.getenv("TARGET_HOST", DEFAULT_TARGET_HOST),
             request_event=self.environment.events.request,
@@ -86,45 +75,41 @@ class ScriptScheduler:
         self.client.trust_env = False
 
         self.timeline = self._load_timeline()
+        self.start_time = self.timeline[0][0]
+        self.end_time = self.timeline[-1][0]
         self.operation_cycle = build_script_operation_cycle()
         self.operation_index = 0
         self.greenlets = []
         self.stop_event = Event()
         self.counter_lock = Semaphore()
+        self.run_metadata_path = self._resolve_output_path(RUN_METADATA_PATH)
 
         self.total_points = len(self.timeline)
         self.total_planned_requests = sum(request_count for _, request_count in self.timeline)
         self.dispatched_requests = 0
         self.completed_requests = 0
         self.failed_requests = 0
-        self.script_second_stats = {
-            timestamp: {
-                "planned": request_count,
-                "dispatched": 0,
-                "completed": 0,
-                "failed": 0,
-            }
-            for timestamp, request_count in self.timeline
-        }
-        self.wall_second_stats = defaultdict(
-            lambda: {
-                "dispatched": 0,
-                "completed": 0,
-                "failed": 0,
-            }
-        )
         self._greenlet = None
-        self._last_metrics_flush = 0.0
+        self._last_request_log_flush = 0.0
+        self.run_started_at = None
+
+    def _resolve_output_path(self, configured_path: str) -> Path:
+        path = Path(configured_path)
+        if path.is_absolute():
+            return path
+        return Path(__file__).resolve().parent / path
 
     def start(self):
+        reset_request_logs()
         logger.info(
-            "Starting script scheduler with %s seconds and %s planned requests from %s",
+            "Starting script scheduler with %s seconds and %s planned requests from %s (%s -> %s)",
             self.total_points,
             self.total_planned_requests,
             self.script_path,
+            self.start_time.isoformat(),
+            self.end_time.isoformat(),
         )
-        self._last_metrics_flush = time.perf_counter()
-        self._write_metrics_files()
+        self._last_request_log_flush = time.perf_counter()
         self._greenlet = gevent.spawn(self._run)
 
     def stop(self):
@@ -134,13 +119,15 @@ class ScriptScheduler:
                 greenlet.kill(block=False)
         if self._greenlet is not None and not self._greenlet.dead:
             self._greenlet.kill(block=False)
-        self._write_metrics_files()
+        flush_request_logs(final=True)
 
     def _load_timeline(self) -> list[tuple[datetime, int]]:
         if not self.script_path.exists():
             raise FileNotFoundError(f"Script CSV not found: {self.script_path}")
 
-        timeline = {}
+        ordered_timeline = []
+        current_time = None
+
         with self.script_path.open(newline="", encoding="utf-8") as csv_file:
             reader = csv.DictReader(csv_file)
             required_columns = {"datetime", "requests"}
@@ -151,24 +138,26 @@ class ScriptScheduler:
 
             for row in reader:
                 row_time = _parse_timestamp(row["datetime"], "CSV datetime")
-                if row_time < self.start_time or row_time > self.end_time:
-                    continue
-
                 requests_value = max(0, int(float(row["requests"])))
-                timeline[row_time] = timeline.get(row_time, 0) + requests_value
 
-        if not timeline:
-            raise ValueError("No CSV rows found inside the configured SCRIPT_START_TIME/SCRIPT_END_TIME range")
+                if current_time is None:
+                    current_time = row_time
 
-        ordered_timeline = []
-        current_time = self.start_time
-        while current_time <= self.end_time:
-            ordered_timeline.append((current_time, timeline.get(current_time, 0)))
-            current_time += timedelta(seconds=1)
+                while current_time < row_time:
+                    ordered_timeline.append((current_time, 0))
+                    current_time += timedelta(seconds=1)
+
+                ordered_timeline.append((row_time, requests_value))
+                current_time = row_time + timedelta(seconds=1)
+
+        if not ordered_timeline:
+            raise ValueError("No CSV rows found in the script file")
 
         return ordered_timeline
 
     def _run(self):
+        self.run_started_at = datetime.now(timezone.utc)
+        self._write_run_metadata()
         start_monotonic = time.perf_counter()
 
         for second_index, (timestamp, request_count) in enumerate(self.timeline):
@@ -181,20 +170,19 @@ class ScriptScheduler:
                 gevent.sleep(remaining)
 
             self._dispatch_second(timestamp, request_count)
-            self._flush_metrics_if_due()
-            if self._should_log_progress(second_index):
-                percentage = ((second_index + 1) / max(self.total_points, 1)) * 100
-                logger.info(
-                    "Script progress %.1f%% (%s/%s) timestamp=%s planned_requests=%s dispatched_so_far=%s completed=%s failed=%s",
-                    percentage,
-                    second_index + 1,
-                    self.total_points,
-                    timestamp.isoformat(),
-                    request_count,
-                    self.dispatched_requests,
-                    self.completed_requests,
-                    self.failed_requests,
-                )
+            self._flush_request_logs_if_due()
+            percentage = ((second_index + 1) / max(self.total_points, 1)) * 100
+            logger.info(
+                "Script progress %.1f%% (%s/%s) timestamp=%s planned_requests=%s dispatched_so_far=%s completed=%s failed=%s",
+                percentage,
+                second_index + 1,
+                self.total_points,
+                timestamp.isoformat(),
+                request_count,
+                self.dispatched_requests,
+                self.completed_requests,
+                self.failed_requests,
+            )
 
         gevent.joinall(self.greenlets)
         logger.info(
@@ -204,12 +192,49 @@ class ScriptScheduler:
             self.completed_requests,
             self.failed_requests,
         )
-        self._write_metrics_files()
+        flush_request_logs(final=True)
         if self.environment.runner is not None and not self.stop_event.is_set():
             if _script_web_ui_enabled():
                 self.environment.runner.stop()
             else:
                 self.environment.runner.quit()
+
+    def _write_run_metadata(self) -> None:
+        if self.run_started_at is None:
+            return
+
+        self.run_metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        run_start_second = self.run_started_at.replace(microsecond=0)
+        with self.run_metadata_path.open("w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(
+                [
+                    "run_start_time",
+                    "run_start_second",
+                    "script_path",
+                    "script_start_time",
+                    "script_end_time",
+                    "script_seconds",
+                    "planned_requests",
+                ]
+            )
+            writer.writerow(
+                [
+                    self.run_started_at.isoformat(),
+                    run_start_second.isoformat(),
+                    str(self.script_path),
+                    self.start_time.isoformat(),
+                    self.end_time.isoformat(),
+                    self.total_points,
+                    self.total_planned_requests,
+                ]
+            )
+
+        logger.info(
+            "Wrote Locust run metadata to %s with run_start_time=%s",
+            self.run_metadata_path,
+            self.run_started_at.isoformat(),
+        )
 
     def _dispatch_second(self, timestamp: datetime, request_count: int) -> None:
         if request_count <= 0:
@@ -238,17 +263,12 @@ class ScriptScheduler:
             return
 
         dispatch_time = datetime.now(self.start_time.tzinfo)
-        dispatch_second = dispatch_time.replace(microsecond=0)
         request_headers = {
             "X-Locust-Request-Id": str(uuid.uuid4()),
             "X-Locust-Script-Timestamp": timestamp.isoformat(),
             "X-Locust-Dispatch-Time": dispatch_time.isoformat(),
             "X-Locust-Operation": operation.name,
         }
-
-        with self.counter_lock:
-            self.script_second_stats[timestamp]["dispatched"] += 1
-            self.wall_second_stats[dispatch_second]["dispatched"] += 1
 
         try:
             response = operation.execute(self.client, headers=request_headers)
@@ -261,20 +281,14 @@ class ScriptScheduler:
             )
             with self.counter_lock:
                 self.failed_requests += 1
-                self.script_second_stats[timestamp]["failed"] += 1
-                self.wall_second_stats[dispatch_second]["failed"] += 1
             return
 
         failed = getattr(response, "error", None) is not None or getattr(response, "status_code", 0) >= 400
         with self.counter_lock:
             if failed:
                 self.failed_requests += 1
-                self.script_second_stats[timestamp]["failed"] += 1
-                self.wall_second_stats[dispatch_second]["failed"] += 1
             else:
                 self.completed_requests += 1
-                self.script_second_stats[timestamp]["completed"] += 1
-                self.wall_second_stats[dispatch_second]["completed"] += 1
 
     def _next_operation(self):
         with self.counter_lock:
@@ -282,88 +296,12 @@ class ScriptScheduler:
             self.operation_index += 1
             return operation
 
-    def _write_metrics_files(self) -> None:
-        with self.counter_lock:
-            script_rows = [
-                (
-                    timestamp,
-                    self.script_second_stats[timestamp]["planned"],
-                    self.script_second_stats[timestamp]["dispatched"],
-                    self.script_second_stats[timestamp]["completed"],
-                    self.script_second_stats[timestamp]["failed"],
-                )
-                for timestamp, _request_count in self.timeline
-            ]
-            wall_rows = [
-                (
-                    timestamp,
-                    stats["dispatched"],
-                    stats["completed"],
-                    stats["failed"],
-                )
-                for timestamp, stats in sorted(self.wall_second_stats.items())
-            ]
-
-        self.script_metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.script_metrics_path.open("w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(
-                [
-                    "script_datetime",
-                    "planned_requests",
-                    "dispatched_requests",
-                    "completed_requests",
-                    "failed_requests",
-                ]
-            )
-            for timestamp, planned, dispatched, completed, failed in script_rows:
-                writer.writerow(
-                    [
-                        timestamp.isoformat(),
-                        planned,
-                        dispatched,
-                        completed,
-                        failed,
-                    ]
-                )
-
-        self.wall_metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.wall_metrics_path.open("w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(
-                [
-                    "wall_clock_second",
-                    "dispatched_requests",
-                    "completed_requests",
-                    "failed_requests",
-                ]
-            )
-            for timestamp, dispatched, completed, failed in wall_rows:
-                writer.writerow(
-                    [
-                        timestamp.isoformat(),
-                        dispatched,
-                        completed,
-                        failed,
-                    ]
-                )
-
-        logger.info("Wrote script metrics to %s", self.script_metrics_path)
-        logger.info("Wrote wall-clock metrics to %s", self.wall_metrics_path)
-        self._last_metrics_flush = time.perf_counter()
-
-    def _flush_metrics_if_due(self) -> None:
-        if (time.perf_counter() - self._last_metrics_flush) < self.metrics_flush_interval:
+    def _flush_request_logs_if_due(self) -> None:
+        if (time.perf_counter() - self._last_request_log_flush) < self.request_log_flush_interval:
             return
-        self._write_metrics_files()
 
-    def _should_log_progress(self, index: int) -> bool:
-        # if index == 0 or index == self.total_points - 1:
-        #     return True
-        # if self.progress_log_interval <= 0:
-        #     return False
-        # return index % self.progress_log_interval == 0
-        return True
+        flush_request_logs()
+        self._last_request_log_flush = time.perf_counter()
 
 
 @events.test_start.add_listener

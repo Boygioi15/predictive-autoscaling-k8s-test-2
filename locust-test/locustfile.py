@@ -10,7 +10,7 @@ def _configure_logging() -> None:
 
 _configure_logging()
 
-mode = os.getenv("MODE", "manual").split()[0].lower()
+mode = os.getenv("MODE").lower()
 
 if mode == "script":
     from script_scheduler import ScriptDriverUser

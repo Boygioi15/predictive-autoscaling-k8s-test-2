@@ -29,6 +29,8 @@ services:
       - ./locust-test/locust.env
     ports:
       - "8089:8089"
+    volumes:
+      - ./shares:/mnt/shares
     entrypoint:
       - sh
       - /mnt/locust/start-locust.sh
