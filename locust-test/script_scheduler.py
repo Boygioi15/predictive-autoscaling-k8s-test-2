@@ -2,15 +2,15 @@ import csv
 import logging
 import os
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import gevent
 from gevent.event import Event
 from gevent.lock import Semaphore
+from gevent.queue import Empty, JoinableQueue
 from locust import User, constant, events, task
-from locust.clients import HttpSession
+from locust.contrib.fasthttp import FastHttpSession
 
 from workload import DEFAULT_TARGET_HOST, build_script_operation_cycle, flush_request_logs, reset_request_logs
 
@@ -66,27 +66,31 @@ class ScriptScheduler:
         if self.dispatch_mode not in {"spread", "burst"}:
             raise ValueError("SCRIPT_DISPATCH_MODE must be either 'spread' or 'burst'")
         self.request_log_flush_interval = max(1, int(os.getenv("REQUEST_LOG_FLUSH_INTERVAL_SEC", "60")))
+        self.worker_count = max(1, int(os.getenv("SCRIPT_CONCURRENCY", "512")))
 
-        self.client = HttpSession(
+        self.client = FastHttpSession(
             base_url=os.getenv("TARGET_HOST", DEFAULT_TARGET_HOST),
             request_event=self.environment.events.request,
             user=_ScriptUserShim(),
+            concurrency=self.worker_count,
+            insecure=True,
         )
-        self.client.trust_env = False
 
         self.timeline = self._load_timeline()
         self.start_time = self.timeline[0][0]
         self.end_time = self.timeline[-1][0]
         self.operation_cycle = build_script_operation_cycle()
         self.operation_index = 0
-        self.greenlets = []
+        self.workers = []
         self.stop_event = Event()
         self.counter_lock = Semaphore()
         self.run_metadata_path = self._resolve_output_path(RUN_METADATA_PATH)
+        self.request_queue = JoinableQueue()
 
         self.total_points = len(self.timeline)
         self.total_planned_requests = sum(request_count for _, request_count in self.timeline)
         self.dispatched_requests = 0
+        self.started_requests = 0
         self.completed_requests = 0
         self.failed_requests = 0
         self._greenlet = None
@@ -102,23 +106,27 @@ class ScriptScheduler:
     def start(self):
         reset_request_logs()
         logger.info(
-            "Starting script scheduler with %s seconds and %s planned requests from %s (%s -> %s)",
+            "Starting script scheduler with %s seconds and %s planned requests from %s (%s -> %s) using concurrency=%s",
             self.total_points,
             self.total_planned_requests,
             self.script_path,
             self.start_time.isoformat(),
             self.end_time.isoformat(),
+            self.worker_count,
         )
         self._last_request_log_flush = time.perf_counter()
+        self.workers = [gevent.spawn(self._worker_loop) for _ in range(self.worker_count)]
         self._greenlet = gevent.spawn(self._run)
 
     def stop(self):
         self.stop_event.set()
-        for greenlet in self.greenlets:
-            if not greenlet.dead:
-                greenlet.kill(block=False)
         if self._greenlet is not None and not self._greenlet.dead:
             self._greenlet.kill(block=False)
+        for _ in self.workers:
+            self.request_queue.put(None)
+        for worker in self.workers:
+            if not worker.dead:
+                worker.kill(block=False)
         flush_request_logs(final=True)
 
     def _load_timeline(self) -> list[tuple[datetime, int]]:
@@ -169,26 +177,28 @@ class ScriptScheduler:
             if remaining > 0:
                 gevent.sleep(remaining)
 
-            self._dispatch_second(timestamp, request_count)
+            self._dispatch_second(start_monotonic, second_index, timestamp, request_count)
             self._flush_request_logs_if_due()
             percentage = ((second_index + 1) / max(self.total_points, 1)) * 100
             logger.info(
-                "Script progress %.1f%% (%s/%s) timestamp=%s planned_requests=%s dispatched_so_far=%s completed=%s failed=%s",
+                "Script progress %.1f%% (%s/%s) timestamp=%s planned_requests=%s dispatched_so_far=%s started=%s completed=%s failed=%s",
                 percentage,
                 second_index + 1,
                 self.total_points,
                 timestamp.isoformat(),
                 request_count,
                 self.dispatched_requests,
+                self.started_requests,
                 self.completed_requests,
                 self.failed_requests,
             )
 
-        gevent.joinall(self.greenlets)
+        self.request_queue.join()
         logger.info(
-            "Script completed: planned=%s dispatched=%s completed=%s failed=%s",
+            "Script completed: planned=%s dispatched=%s started=%s completed=%s failed=%s",
             self.total_planned_requests,
             self.dispatched_requests,
+            self.started_requests,
             self.completed_requests,
             self.failed_requests,
         )
@@ -236,47 +246,59 @@ class ScriptScheduler:
             self.run_started_at.isoformat(),
         )
 
-    def _dispatch_second(self, timestamp: datetime, request_count: int) -> None:
+    def _dispatch_second(
+        self,
+        start_monotonic: float,
+        second_index: int,
+        timestamp: datetime,
+        request_count: int,
+    ) -> None:
         if request_count <= 0:
             return
 
-        for request_index in range(request_count):
-            operation = self._next_operation()
-            delay = 0.0
-            if self.dispatch_mode == "spread" and request_count > 1:
-                delay = request_index / request_count
-
-            greenlet = gevent.spawn_later(
-                delay,
-                self._send_request,
-                timestamp,
-                request_index + 1,
-                operation,
-            )
-            self.greenlets.append(greenlet)
+        if self.dispatch_mode == "burst" or request_count == 1:
+            for _ in range(request_count):
+                self.request_queue.put((timestamp, self._next_operation()))
+        else:
+            second_start = start_monotonic + float(second_index)
+            for request_index in range(request_count):
+                scheduled_at = second_start + (request_index / request_count)
+                remaining = scheduled_at - time.perf_counter()
+                if remaining > 0:
+                    gevent.sleep(remaining)
+                self.request_queue.put((timestamp, self._next_operation()))
 
         with self.counter_lock:
             self.dispatched_requests += request_count
 
-    def _send_request(self, timestamp: datetime, request_number: int, operation) -> None:
+    def _worker_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                job = self.request_queue.get(timeout=0.5)
+            except Empty:
+                continue
+
+            if job is None:
+                self.request_queue.task_done()
+                return
+
+            _, operation = job
+            self._send_request(operation)
+            self.request_queue.task_done()
+
+    def _send_request(self, operation) -> None:
         if self.stop_event.is_set():
             return
 
-        dispatch_time = datetime.now(self.start_time.tzinfo)
-        request_headers = {
-            "X-Locust-Request-Id": str(uuid.uuid4()),
-            "X-Locust-Script-Timestamp": timestamp.isoformat(),
-            "X-Locust-Dispatch-Time": dispatch_time.isoformat(),
-            "X-Locust-Operation": operation.name,
-        }
+        with self.counter_lock:
+            self.started_requests += 1
 
+        response = None
         try:
-            response = operation.execute(self.client, headers=request_headers)
+            response = operation.execute(self.client)
         except Exception:
             logger.exception(
-                "Script request crashed at timestamp=%s request=%s operation=%s",
-                timestamp.isoformat(),
-                request_number,
+                "Script request crashed operation=%s",
                 operation.name,
             )
             with self.counter_lock:
@@ -289,6 +311,9 @@ class ScriptScheduler:
                 self.failed_requests += 1
             else:
                 self.completed_requests += 1
+
+        if hasattr(response, "close"):
+            response.close()
 
     def _next_operation(self):
         with self.counter_lock:

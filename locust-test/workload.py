@@ -40,7 +40,7 @@ class RequestClient(Protocol):
 class ScriptOperation:
     name: str
     weight: int
-    execute: Callable[[RequestClient, dict[str, str] | None], object]
+    execute: Callable[[RequestClient], object]
 
 
 def _get_int(env_name: str, default: int) -> int:
@@ -61,9 +61,7 @@ def _get_int_range(min_env_name: str, max_env_name: str, default_min: int, defau
     return min_value, max_value
 
 
-def _record_request(url: str, time_sent: str) -> None:
-    second_bucket = time_sent[:19] + "Z"
-
+def _record_request(second_bucket: str, url: str) -> None:
     with _csv_lock:
         _request_counts[(second_bucket, url)] += 1
 
@@ -102,16 +100,16 @@ def flush_request_logs(log_path: str = CSV_LOG_PATH, final: bool = False) -> Non
         for second_bucket, url, count in rows_to_flush:
             writer.writerow([second_bucket, url, count])
 
-
 def _request_and_log(client: RequestClient, method: str, url: str, **kwargs):
-    time_sent = datetime.now(timezone.utc).isoformat()
     if REQUEST_CSV_LOG_ENABLED:
-        _record_request(url, time_sent)
+        second_bucket = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        _record_request(second_bucket, url)
+    kwargs.setdefault("stream", True)
     request_method = getattr(client, method)
     return request_method(url, **kwargs)
 
 
-def range_prime_request(client: RequestClient, headers: dict[str, str] | None = None):
+def range_prime_request(client: RequestClient):
     range_min, range_max = _get_int_range("PRIME_RANGE_MIN", "PRIME_RANGE_MAX", 1_000, 500_000)
     n = random.randint(range_min, range_max)
     return _request_and_log(
@@ -119,11 +117,10 @@ def range_prime_request(client: RequestClient, headers: dict[str, str] | None = 
         "get",
         f"/api/prime/range?n={n}",
         name="/prime/range",
-        headers=headers,
     )
 
 
-def kth_prime_request(client: RequestClient, headers: dict[str, str] | None = None):
+def kth_prime_request(client: RequestClient):
     kth_min, kth_max = _get_int_range("PRIME_KTH_MIN", "PRIME_KTH_MAX", 1_000, 50_000)
     k = random.randint(kth_min, kth_max)
     return _request_and_log(
@@ -131,11 +128,10 @@ def kth_prime_request(client: RequestClient, headers: dict[str, str] | None = No
         "get",
         f"/api/prime/kth?k={k}",
         name="/prime/kth",
-        headers=headers,
     )
 
 
-def check_prime_request(client: RequestClient, headers: dict[str, str] | None = None):
+def check_prime_request(client: RequestClient):
     check_min, check_max = _get_int_range("PRIME_CHECK_MIN", "PRIME_CHECK_MAX", 5_000_000, 100_000_000)
     n = random.randint(check_min, check_max)
     return _request_and_log(
@@ -143,11 +139,10 @@ def check_prime_request(client: RequestClient, headers: dict[str, str] | None = 
         "get",
         f"/api/prime/check?n={n}",
         name="/prime/check",
-        headers=headers,
     )
 
 
-def analyze_text_request(client: RequestClient, headers: dict[str, str] | None = None):
+def analyze_text_request(client: RequestClient):
     text = random_text(1000)
     return _request_and_log(
         client,
@@ -155,11 +150,10 @@ def analyze_text_request(client: RequestClient, headers: dict[str, str] | None =
         "/text/analyze",
         json={"text": text},
         name="/text/analyze",
-        headers=headers,
     )
 
 
-def transform_text_request(client: RequestClient, headers: dict[str, str] | None = None):
+def transform_text_request(client: RequestClient):
     text = random_text(200)
     return _request_and_log(
         client,
@@ -167,7 +161,6 @@ def transform_text_request(client: RequestClient, headers: dict[str, str] | None
         "/text/transform?rounds=50",
         json={"text": text},
         name="/text/transform",
-        headers=headers,
     )
 
 
