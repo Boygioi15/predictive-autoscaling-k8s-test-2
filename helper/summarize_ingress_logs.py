@@ -63,6 +63,13 @@ def _append_rows(output_path: Path, rows: list[tuple[str, int]]) -> None:
             writer.writerow([second, count])
 
 
+def _matches_ingress(payload: dict, ingress_name: str) -> bool:
+    payload_ingress = payload.get("ingress")
+    if payload_ingress is None:
+        return True
+    return payload_ingress == ingress_name
+
+
 def _stream_counts(input_handle, output_path: Path, ingress_name: str) -> None:
     pending_counts: dict[str, int] = defaultdict(int)
     latest_second = None
@@ -79,7 +86,7 @@ def _stream_counts(input_handle, output_path: Path, ingress_name: str) -> None:
         except json.JSONDecodeError:
             continue
 
-        if payload.get("ingress") != ingress_name:
+        if not _matches_ingress(payload, ingress_name):
             continue
 
         request_time = payload.get("time")
@@ -123,7 +130,7 @@ def main() -> int:
             except json.JSONDecodeError:
                 continue
 
-            if payload.get("ingress") != args.ingress:
+            if not _matches_ingress(payload, args.ingress):
                 continue
 
             request_time = payload.get("time")
