@@ -17,7 +17,6 @@ spec:
       containers:
         - name: frontend
           image: frontend:v1
-          imagePullPolicy: Never
           ports:
             - containerPort: 8080 # Cổng web server của frontend
 

@@ -51,12 +51,13 @@ install-helm-monitor:
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 	helm repo update
 	kubectl create namespace monitoring
-	helm install monitoring-stack prometheus-community/kube-prometheus-stack -n monitoring
+	helm upgrade --install monitoring-stack prometheus-community/kube-prometheus-stack -n monitoring
 install-helm-ingress: 
 	helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
 	helm repo update
-	helm install ingress-nginx ingress-nginx/ingress-nginx \
-	--namespace ingress-nginx --create-namespace \
+	helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+	--namespace ingress-nginx \
+	--create-namespace \
 	--set controller.metrics.enabled=true \
 	--set controller.metrics.serviceMonitor.enabled=true \
 	--set controller.metrics.serviceMonitor.additionalLabels.release="monitoring-stack"
