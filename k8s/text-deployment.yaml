@@ -22,10 +22,7 @@ spec:
     spec:
       containers:
         - name: text-service-container # Tên của container bên trong Pod
-          image: text-service:v1 # Tên Image (đã build)
-
-          # CHẾ ĐỘ KÉO IMAGE (Đặc biệt quan trọng với Minikube)
-          imagePullPolicy: Never
+          image: docker.io/boygioi/text-service:latest # Tên Image (đã build)
 
           # CỔNG CỦA CONTAINER
           ports:

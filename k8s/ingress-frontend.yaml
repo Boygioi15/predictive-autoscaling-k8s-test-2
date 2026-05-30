@@ -4,8 +4,9 @@ metadata:
   name: ingress-frontend
   annotations:
 spec:
+  ingressClassName: nginx
   rules:
-    - host: autoscaling-k8s-test
+    - host: silkeste.fun
       http:
         paths:
           # LUẬT 1: FRONTEND (Ưu tiên thấp nhất, để cuối)

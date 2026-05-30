@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: frontend:v1
+          image: docker.io/boygioi/frontend-service:latest
           ports:
             - containerPort: 8080 # Cổng web server của frontend
 

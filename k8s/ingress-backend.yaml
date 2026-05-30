@@ -7,8 +7,9 @@ metadata:
     nginx.ingress.kubernetes.io/rewrite-target: /$1
     nginx.ingress.kubernetes.io/enable-access-log: "true"
 spec:
+  ingressClassName: nginx
   rules:
-    - host: autoscaling-k8s-test # (Hoặc my-app.local tùy bạn chọn)
+    - host: silkeste.fun # (Hoặc my-app.local tùy bạn chọn)
       http:
         paths:
           # Rule cho Prime

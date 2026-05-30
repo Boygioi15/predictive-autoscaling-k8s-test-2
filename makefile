@@ -2,9 +2,13 @@
 autoscale-prime: 
 	kubectl autoscale deployment prime-service-deployment --cpu-percent=50 --min=1 --max=10
 build-service: 
-	minikube -p=thesis image build -t prime-service:v1 ./services/prime-service
-	minikube -p=thesis image build -t text-service:v1 ./services/text-service
-	minikube -p=thesis image build -t frontend:v1 ./services/frontend
+	docker build -t docker.io/boygioi/prime-service:latest ./services/prime-service
+	docker build -t docker.io/boygioi/text-service:latest ./services/text-service
+	docker build -t docker.io/boygioi/frontend-service:latest ./services/frontend
+push-service: 
+	docker push docker.io/boygioi/prime-service:latest
+	docker push docker.io/boygioi/text-service:latest
+	docker push docker.io/boygioi/frontend-service:latest
 build-locust: 
 	docker compose build locust
 build-forecasting-service: 
@@ -94,12 +98,6 @@ capture-ingress-raw-logs:
 watch-ingress-request-counts:
 	sh helper/watch_ingress_request_counts.sh ingress-backend shares/ingress_request_report.csv
 
-test-pod:
-	kubectl run -it busybox --image=busybox --restart=Never -- sh
-tss-build: 
-	minikube -p=thesis image build -t custom-scaling-server:latest ./helper/custom-scaling-server
-tss-deploy: 
-	kubectl apply -f k8s/custom-scaling-server.yaml
 #curl -X PUT http://localhost:1208?n=5
 #### 2. Makefile for managing Minikube cluster and services with cgroup adjustments
 start-environment: 

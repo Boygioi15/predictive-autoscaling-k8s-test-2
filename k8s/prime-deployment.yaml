@@ -22,10 +22,7 @@ spec:
     spec:
       containers:
         - name: prime-service-container # Tên của container bên trong Pod
-          image: prime-service:v1 # Tên Image (đã build)
-
-          # CHẾ ĐỘ KÉO IMAGE (Đặc biệt quan trọng với Minikube)
-          imagePullPolicy: Never
+          image: docker.io/boygioi/prime-service:latest # Tên Image (đã build)
 
           # CỔNG CỦA CONTAINER
           ports:
