@@ -117,6 +117,25 @@ The design choice here is:
 - do not hide overload behind backlog
 - make missed capacity visible immediately
 
+### 5. Optional bounded backlog
+
+The sender can also run with a bounded FIFO backlog:
+
+- `BACKLOG_CAPACITY`
+- `BACKLOG_MAX_AGE_SECONDS`
+
+If no token is free at schedule time and backlog is enabled:
+
+- the request is appended to the backlog
+- it waits for a token to become free
+- if it waits too long, it expires and is dropped
+- if the backlog is full, it is dropped immediately
+
+This gives a middle ground between:
+
+- exact punctuality with no retry opportunity
+- and an unbounded hidden queue
+
 ## Timeout Model
 
 The sender enforces timeouts in two places:
@@ -150,6 +169,10 @@ This is the best current meaning of:
 
 It increases whether the request is actually launched or dropped for capacity.
 
+### `enqueued_requests`
+
+How many scheduled requests were placed into the bounded backlog instead of being started immediately.
+
 ### `started_requests`
 
 How many requests successfully acquired an in-flight token and were actually launched.
@@ -158,6 +181,14 @@ This is the best current meaning of:
 
 - sent
 - started on the generator side
+
+### `started_immediate_requests`
+
+How many requests started immediately at schedule time.
+
+### `started_from_backlog_requests`
+
+How many requests were delayed in backlog and later started when a token freed up.
 
 ### `completed_requests`
 
@@ -181,31 +212,54 @@ These are separated from generic failures because they usually mean:
 
 ### `dropped_due_to_capacity`
 
-How many scheduled requests were not launched because all in-flight tokens were already occupied.
+How many requests were ultimately lost because the sender could not place them.
 
-This is the important replacement for an internal queue backlog.
+With backlog disabled, this means:
+
+- all in-flight tokens were occupied at schedule time
+
+With backlog enabled, this includes:
+
+- backlog full at schedule time
+- backlog items that expired before they could start
+
+### `dropped_backlog_full_requests`
+
+How many requests were dropped because backlog was enabled but already full.
+
+### `backlog_expired_requests`
+
+How many requests were enqueued but waited longer than `BACKLOG_MAX_AGE_SECONDS`, so they were dropped before starting.
 
 ## About "Enqueued"
 
-There is no backlog queue stage in this design.
+When `BACKLOG_CAPACITY=0`, there is no backlog queue stage.
 
 That means:
 
 - we do not currently have an "enqueued and waiting for later send" metric
 
-This is deliberate.
+This is deliberate for the strict no-backlog mode.
 
 If we added a real waiting queue, we would reintroduce the same problem we wanted to avoid:
 
 - the sender would look like it is keeping up
 - but actual request starts would silently trail behind the trace
 
-So the current state machine is:
+So the no-backlog state machine is:
 
 1. planned in CSV
 2. scheduled now
 3. either started or dropped for capacity
 4. if started, then completed / failed / timed out
+
+With bounded backlog enabled, the state machine becomes:
+
+1. planned in CSV
+2. scheduled now
+3. either started immediately, enqueued, or dropped if backlog is full
+4. enqueued requests either start later or expire
+5. started requests then complete / fail / time out
 
 ## Output Files
 
@@ -244,11 +298,16 @@ This contains one row per wall-clock second with:
 
 - `planned`
 - `scheduled`
+- `enqueued`
 - `started`
+- `started_immediate`
+- `started_from_backlog`
 - `completed`
 - `failed`
 - `timed_out`
 - `dropped_capacity`
+- `dropped_backlog_full`
+- `backlog_expired`
 
 This file is the quickest way to explain dips in the started-request graph.
 
@@ -256,10 +315,29 @@ Some useful interpretations:
 
 - `planned - scheduled` should usually stay near `0`
 - `planned - started` shows the visible gap between intended and actually launched traffic
+- `scheduled - enqueued - started_immediate` is the strict on-time loss before backlog rescue
 - `scheduled - started` during the same second usually shows immediate capacity pressure
-- `dropped_capacity` shows requests that were refused instead of queued
+- `enqueued` shows how much work needed buffering
+- `started_from_backlog` shows how much work backlog successfully rescued
+- `dropped_capacity` shows requests that were ultimately lost
 - `completed + failed + timed_out` explains how fast in-flight slots were released
 - cumulative `started - completed - failed - timed_out` approximates in-flight load
+
+### `shares/load_test_incident_report.csv`
+
+This records one row per matching incident with:
+
+- `timestamp`
+- `second`
+- `url`
+- `incident_type`
+- `message`
+
+Right now it is intentionally filtered to:
+
+- `Connection reset by peer`
+
+This file is meant for correlation against dips, not as a full error log.
 
 ## Logging
 
@@ -339,5 +417,4 @@ If needed, the next useful extensions would be:
 
 - write a small run-summary JSON or CSV with `scheduled`, `started`, `completed`, `failed`, `timed_out`, and `dropped_due_to_capacity`
 - add per-minute snapshots to a separate report file
-- add an optional bounded waiting queue if you explicitly want "enqueued" as a real stage
 - move to Go only if Python itself becomes the bottleneck

@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import sys
+from collections import deque
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -27,14 +28,23 @@ class ScriptPoint:
 
 
 @dataclass(frozen=True)
+class BacklogItem:
+    request: PreparedRequest
+    enqueued_monotonic: float
+
+
+@dataclass(frozen=True)
 class SenderConfig:
     script_path: Path
     request_report_path: Path
     statistics_report_path: Path
+    incident_report_path: Path
     metadata_path: Path
     target_host: str
     dispatch_mode: str
     max_inflight: int
+    backlog_capacity: int
+    backlog_max_age_seconds: float
     request_timeout_seconds: float
     connect_timeout_seconds: float
     progress_log_interval_sec: int
@@ -91,6 +101,14 @@ def load_runtime_config() -> SenderConfig:
     if max_inflight < 1:
         raise ValueError("MAX_INFLIGHT must be at least 1")
 
+    backlog_capacity = _get_int("BACKLOG_CAPACITY", 0)
+    if backlog_capacity < 0:
+        raise ValueError("BACKLOG_CAPACITY must be at least 0")
+
+    backlog_max_age_seconds = _get_float("BACKLOG_MAX_AGE_SECONDS", 1.0)
+    if backlog_max_age_seconds <= 0:
+        raise ValueError("BACKLOG_MAX_AGE_SECONDS must be greater than 0")
+
     request_timeout_seconds = _get_float("REQUEST_TIMEOUT_SECONDS", 0.2)
     connect_timeout_seconds = _get_float("CONNECT_TIMEOUT_SECONDS", request_timeout_seconds)
     if request_timeout_seconds <= 0:
@@ -104,10 +122,15 @@ def load_runtime_config() -> SenderConfig:
         statistics_report_path=Path(
             os.getenv("STATISTICS_REPORT_PATH", "/mnt/shares/load_test_statistics_report.csv")
         ),
+        incident_report_path=Path(
+            os.getenv("INCIDENT_REPORT_PATH", "/mnt/shares/load_test_incident_report.csv")
+        ),
         metadata_path=Path(os.getenv("METADATA_PATH", "/mnt/shares/load_test_metadata.csv")),
         target_host=target_host,
         dispatch_mode=dispatch_mode,
         max_inflight=max_inflight,
+        backlog_capacity=backlog_capacity,
+        backlog_max_age_seconds=backlog_max_age_seconds,
         request_timeout_seconds=request_timeout_seconds,
         connect_timeout_seconds=connect_timeout_seconds,
         progress_log_interval_sec=progress_log_interval_sec,
@@ -247,11 +270,16 @@ class StatisticsReportWriter:
     COLUMN_NAMES = (
         "planned",
         "scheduled",
+        "enqueued",
         "started",
+        "started_immediate",
+        "started_from_backlog",
         "completed",
         "failed",
         "timed_out",
         "dropped_capacity",
+        "dropped_backlog_full",
+        "backlog_expired",
     )
 
     def __init__(self, output_path: Path):
@@ -315,6 +343,35 @@ class StatisticsReportWriter:
         self.last_flushed_second = closed_through
 
 
+class IncidentReportWriter:
+    def __init__(self, output_path: Path):
+        self.output_path = output_path
+        self.rows: list[tuple[str, str, str, str, str]] = []
+        self._flushed_count = 0
+
+    def reset(self) -> None:
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.output_path.open("w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["timestamp", "second", "url", "incident_type", "message"])
+        self.rows.clear()
+        self._flushed_count = 0
+
+    def record(self, timestamp: str, second_bucket: str, url: str, incident_type: str, message: str) -> None:
+        self.rows.append((timestamp, second_bucket, url, incident_type, message))
+
+    def flush(self) -> None:
+        if self._flushed_count >= len(self.rows):
+            return
+
+        with self.output_path.open("a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            for row in self.rows[self._flushed_count :]:
+                writer.writerow(row)
+
+        self._flushed_count = len(self.rows)
+
+
 class LoadSender:
     def __init__(self, config: SenderConfig):
         self.config = config
@@ -322,9 +379,12 @@ class LoadSender:
         self.workload_planner = WorkloadPlanner(load_workload_config())
         self.report_writer = RequestReportWriter(config.request_report_path)
         self.statistics_writer = StatisticsReportWriter(config.statistics_report_path)
+        self.incident_writer = IncidentReportWriter(config.incident_report_path)
         self.token_queue: asyncio.Queue[object] = asyncio.Queue(maxsize=config.max_inflight)
         for _ in range(config.max_inflight):
             self.token_queue.put_nowait(object())
+        self.backlog_queue: deque[BacklogItem] = deque()
+        self.backlog_available = asyncio.Event()
 
         self.inflight_tasks: set[asyncio.Task[None]] = set()
         self.stop_requested = asyncio.Event()
@@ -336,18 +396,28 @@ class LoadSender:
         self.failed_requests = 0
         self.timed_out_requests = 0
         self.dropped_due_to_capacity = 0
+        self.dropped_backlog_full_requests = 0
+        self.backlog_expired_requests = 0
+        self.enqueued_requests = 0
+        self.started_immediate_requests = 0
+        self.started_from_backlog_requests = 0
         self.planned_requests_so_far = 0
         self.scheduled_requests = 0
         self.dispatched_seconds = 0
+        self.backlog_max_depth = 0
+        self.scheduling_complete = False
 
         self.run_started_at: datetime | None = None
         self._progress_task: asyncio.Task[None] | None = None
+        self._backlog_task: asyncio.Task[None] | None = None
         self._last_flush_monotonic = 0.0
+        self._previous_loop_exception_handler = None
 
     async def run(self) -> None:
         import aiohttp
 
         self.report_writer.reset()
+        self.incident_writer.reset()
         self.run_started_at = datetime.now(timezone.utc)
         self.statistics_writer.reset(self.run_started_at)
         self._write_metadata()
@@ -355,11 +425,13 @@ class LoadSender:
 
         logger.info(
             "Starting custom sender with %s seconds and %s planned requests from %s using max_inflight=%s "
-            "dispatch_mode=%s timeout=%.3fs target=%s",
+            "backlog_capacity=%s backlog_max_age=%.3fs dispatch_mode=%s timeout=%.3fs target=%s",
             self.total_points,
             self.total_planned_requests,
             self.config.script_path,
             self.config.max_inflight,
+            self.config.backlog_capacity,
+            self.config.backlog_max_age_seconds,
             self.config.dispatch_mode,
             self.config.request_timeout_seconds,
             self.config.target_host,
@@ -386,8 +458,10 @@ class LoadSender:
             timeout=timeout,
             trust_env=False,
         ) as session:
-            self._progress_task = asyncio.create_task(self._progress_loop())
+            self._backlog_task = asyncio.create_task(self._backlog_loop(session))
             loop = asyncio.get_running_loop()
+            self._install_loop_exception_handler(loop)
+            self._progress_task = asyncio.create_task(self._progress_loop())
             start_monotonic = loop.time()
 
             try:
@@ -403,26 +477,42 @@ class LoadSender:
                     await self._dispatch_second(session, second_index, point, start_monotonic)
                     self.dispatched_seconds = second_index + 1
             finally:
+                self.scheduling_complete = True
+                self.backlog_available.set()
                 if self._progress_task is not None:
                     self._progress_task.cancel()
                     await asyncio.gather(self._progress_task, return_exceptions=True)
+                self._restore_loop_exception_handler(loop)
+
+            if self._backlog_task is not None:
+                await asyncio.gather(self._backlog_task, return_exceptions=True)
 
             if self.inflight_tasks:
                 await asyncio.gather(*self.inflight_tasks, return_exceptions=True)
 
         self.report_writer.flush_closed(final=True)
         self.statistics_writer.flush_closed(final=True)
+        self.incident_writer.flush()
         logger.info(
-            "Run complete: total_planned=%s planned_so_far=%s scheduled=%s started=%s completed=%s failed=%s timed_out=%s dropped_capacity=%s inflight=%s",
+            "Run complete: total_planned=%s planned_so_far=%s scheduled=%s enqueued=%s started=%s started_immediate=%s "
+            "started_from_backlog=%s completed=%s failed=%s timed_out=%s dropped_capacity=%s dropped_backlog_full=%s "
+            "backlog_expired=%s inflight=%s backlog_depth=%s backlog_max_depth=%s",
             self.total_planned_requests,
             self.planned_requests_so_far,
             self.scheduled_requests,
+            self.enqueued_requests,
             self.started_requests,
+            self.started_immediate_requests,
+            self.started_from_backlog_requests,
             self.completed_requests,
             self.failed_requests,
             self.timed_out_requests,
             self.dropped_due_to_capacity,
+            self.dropped_backlog_full_requests,
+            self.backlog_expired_requests,
             self.inflight_count,
+            len(self.backlog_queue),
+            self.backlog_max_depth,
         )
 
     @property
@@ -451,7 +541,7 @@ class LoadSender:
 
         if self.config.dispatch_mode == "burst" or request_count == 1:
             for request_index in range(request_count):
-                self._launch_if_capacity(session, second_index, request_index)
+                self._launch_or_backlog(session, second_index, request_index)
         else:
             loop = asyncio.get_running_loop()
             second_start = start_monotonic + float(second_index)
@@ -460,11 +550,11 @@ class LoadSender:
                 remaining = scheduled_at - loop.time()
                 if remaining > 0:
                     await asyncio.sleep(remaining)
-                self._launch_if_capacity(session, second_index, request_index)
+                self._launch_or_backlog(session, second_index, request_index)
 
         self._flush_request_report_if_due()
 
-    def _launch_if_capacity(
+    def _launch_or_backlog(
         self,
         session: "aiohttp.ClientSession",
         second_index: int,
@@ -484,17 +574,96 @@ class LoadSender:
         try:
             token = self.token_queue.get_nowait()
         except asyncio.QueueEmpty:
-            self.dropped_due_to_capacity += 1
-            self.statistics_writer.record(second_bucket, "dropped_capacity")
+            self._enqueue_or_drop(second_bucket, request)
             return
 
+        self._start_request_task(session, token, request, second_bucket, from_backlog=False)
+
+    def _enqueue_or_drop(self, second_bucket: str, request: PreparedRequest) -> None:
+        if self.config.backlog_capacity > 0 and len(self.backlog_queue) < self.config.backlog_capacity:
+            item = BacklogItem(request=request, enqueued_monotonic=asyncio.get_running_loop().time())
+            self.backlog_queue.append(item)
+            self.enqueued_requests += 1
+            self.statistics_writer.record(second_bucket, "enqueued")
+            self.backlog_max_depth = max(self.backlog_max_depth, len(self.backlog_queue))
+            self.backlog_available.set()
+            return
+
+        self.dropped_due_to_capacity += 1
+        self.statistics_writer.record(second_bucket, "dropped_capacity")
+        if self.config.backlog_capacity > 0:
+            self.dropped_backlog_full_requests += 1
+            self.statistics_writer.record(second_bucket, "dropped_backlog_full")
+
+    def _start_request_task(
+        self,
+        session: "aiohttp.ClientSession",
+        token: object,
+        request: PreparedRequest,
+        second_bucket: str,
+        from_backlog: bool,
+    ) -> None:
         self.started_requests += 1
         self.report_writer.record(second_bucket, request.report_url)
         self.statistics_writer.record(second_bucket, "started")
+        if from_backlog:
+            self.started_from_backlog_requests += 1
+            self.statistics_writer.record(second_bucket, "started_from_backlog")
+        else:
+            self.started_immediate_requests += 1
+            self.statistics_writer.record(second_bucket, "started_immediate")
 
         task = asyncio.create_task(self._execute_request(session, token, request))
         self.inflight_tasks.add(task)
         task.add_done_callback(self.inflight_tasks.discard)
+
+    async def _backlog_loop(self, session: "aiohttp.ClientSession") -> None:
+        while True:
+            if not self.backlog_queue:
+                if self.scheduling_complete:
+                    return
+                self.backlog_available.clear()
+                try:
+                    await asyncio.wait_for(self.backlog_available.wait(), timeout=0.5)
+                except TimeoutError:
+                    pass
+                continue
+
+            head_item = self.backlog_queue[0]
+            if self._is_backlog_item_expired(head_item):
+                self.backlog_queue.popleft()
+                self.dropped_due_to_capacity += 1
+                self.backlog_expired_requests += 1
+                second_bucket = _second_bucket_now()
+                self.statistics_writer.record(second_bucket, "dropped_capacity")
+                self.statistics_writer.record(second_bucket, "backlog_expired")
+                continue
+
+            token = await self.token_queue.get()
+            if not self.backlog_queue:
+                self.token_queue.put_nowait(token)
+                continue
+
+            item = self.backlog_queue.popleft()
+            if self._is_backlog_item_expired(item):
+                self.token_queue.put_nowait(token)
+                self.dropped_due_to_capacity += 1
+                self.backlog_expired_requests += 1
+                second_bucket = _second_bucket_now()
+                self.statistics_writer.record(second_bucket, "dropped_capacity")
+                self.statistics_writer.record(second_bucket, "backlog_expired")
+                continue
+
+            self._start_request_task(
+                session=session,
+                token=token,
+                request=item.request,
+                second_bucket=_second_bucket_now(),
+                from_backlog=True,
+            )
+
+    def _is_backlog_item_expired(self, item: BacklogItem) -> bool:
+        return (asyncio.get_running_loop().time() - item.enqueued_monotonic) > self.config.backlog_max_age_seconds
 
     async def _execute_request(
         self,
@@ -524,10 +693,12 @@ class LoadSender:
         except aiohttp.ClientError:
             self.failed_requests += 1
             self.statistics_writer.record(_second_bucket_now(), "failed")
+            self._record_incident_if_relevant(request, "client_error", sys.exc_info()[1])
         except Exception:
             logger.exception("Unhandled request failure for %s %s", request.method, request.path)
             self.failed_requests += 1
             self.statistics_writer.record(_second_bucket_now(), "failed")
+            self._record_incident_if_relevant(request, "unexpected_error", sys.exc_info()[1])
         finally:
             self.token_queue.put_nowait(token)
 
@@ -536,21 +707,31 @@ class LoadSender:
             await asyncio.sleep(self.config.progress_log_interval_sec)
             self.report_writer.flush_closed()
             self.statistics_writer.flush_closed()
+            self.incident_writer.flush()
             percentage = (self.dispatched_seconds / max(self.total_points, 1)) * 100
             logger.info(
-                "Progress %.1f%% (%s/%s seconds) total_planned=%s planned_so_far=%s scheduled=%s started=%s completed=%s failed=%s timed_out=%s dropped_capacity=%s inflight=%s",
+                "Progress %.1f%% (%s/%s seconds) total_planned=%s planned_so_far=%s scheduled=%s enqueued=%s started=%s "
+                "started_immediate=%s started_from_backlog=%s completed=%s failed=%s timed_out=%s dropped_capacity=%s "
+                "dropped_backlog_full=%s backlog_expired=%s inflight=%s backlog_depth=%s backlog_max_depth=%s",
                 percentage,
                 self.dispatched_seconds,
                 self.total_points,
                 self.total_planned_requests,
                 self.planned_requests_so_far,
                 self.scheduled_requests,
+                self.enqueued_requests,
                 self.started_requests,
+                self.started_immediate_requests,
+                self.started_from_backlog_requests,
                 self.completed_requests,
                 self.failed_requests,
                 self.timed_out_requests,
                 self.dropped_due_to_capacity,
+                self.dropped_backlog_full_requests,
+                self.backlog_expired_requests,
                 self.inflight_count,
+                len(self.backlog_queue),
+                self.backlog_max_depth,
             )
 
     def _flush_request_report_if_due(self) -> None:
@@ -560,7 +741,61 @@ class LoadSender:
 
         self.report_writer.flush_closed()
         self.statistics_writer.flush_closed()
+        self.incident_writer.flush()
         self._last_flush_monotonic = now
+
+    def _record_incident_if_relevant(self, request: PreparedRequest, incident_type: str, exc: BaseException | None) -> None:
+        if exc is None:
+            return
+
+        message = str(exc)
+        if "Connection reset by peer" not in message:
+            return
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        second_bucket = _second_bucket_now()
+        self.incident_writer.record(
+            timestamp=timestamp,
+            second_bucket=second_bucket,
+            url=request.report_url,
+            incident_type=incident_type,
+            message=message,
+        )
+
+    def _record_loop_incident_if_relevant(self, context: dict[str, object]) -> None:
+        exc = context.get("exception")
+        message = context.get("message")
+        combined_message = " | ".join(
+            part for part in [str(exc) if exc is not None else "", str(message) if message is not None else ""] if part
+        )
+        if "Connection reset by peer" not in combined_message:
+            return
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+        second_bucket = _second_bucket_now()
+        self.incident_writer.record(
+            timestamp=timestamp,
+            second_bucket=second_bucket,
+            url="__event_loop__",
+            incident_type="loop_exception",
+            message=combined_message,
+        )
+
+    def _install_loop_exception_handler(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._previous_loop_exception_handler = loop.get_exception_handler()
+
+        def _handle_exception(event_loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+            self._record_loop_incident_if_relevant(context)
+            if self._previous_loop_exception_handler is not None:
+                self._previous_loop_exception_handler(event_loop, context)
+            else:
+                event_loop.default_exception_handler(context)
+
+        loop.set_exception_handler(_handle_exception)
+
+    def _restore_loop_exception_handler(self, loop: asyncio.AbstractEventLoop) -> None:
+        loop.set_exception_handler(self._previous_loop_exception_handler)
+        self._previous_loop_exception_handler = None
 
     def _write_metadata(self) -> None:
         if self.run_started_at is None:
