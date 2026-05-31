@@ -11,6 +11,8 @@ push-service:
 	docker push docker.io/boygioi/frontend-service:latest
 build-locust: 
 	docker compose build locust
+build-custom-load-test:
+	docker compose build custom-load-test
 build-forecasting-service: 
 	minikube -p=thesis image build -t forecasting-service:v1 ./forecasting-service
 start:
@@ -91,6 +93,8 @@ deploy-locust:
 	docker compose up -d locust
 open-locust: 
 	@echo "Locust UI: http://localhost:8089"
+run-custom-load-test:
+	docker compose run --rm custom-load-test
 ingress-request-counts:
 	python3 helper/summarize_ingress_logs.py --input shares/ingress_raw.log --output shares/ingress_request_report.csv
 capture-ingress-raw-logs:

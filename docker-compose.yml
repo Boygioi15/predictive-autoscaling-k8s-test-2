@@ -35,6 +35,16 @@ services:
       - sh
       - /mnt/locust/start-locust.sh
 
+  custom-load-test:
+    build:
+      context: ./custom-load-test
+      dockerfile: Dockerfile
+    container_name: custom-load-test
+    env_file:
+      - ./custom-load-test/custom_load_test.env
+    volumes:
+      - ./shares:/mnt/shares
+
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus_server
