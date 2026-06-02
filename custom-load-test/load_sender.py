@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import json
 import logging
 import os
 import signal
+import subprocess
 import sys
+import time
 from collections import deque
 from collections import defaultdict
 from dataclasses import dataclass
@@ -40,6 +43,7 @@ class SenderConfig:
     statistics_report_path: Path
     incident_report_path: Path
     metadata_path: Path
+    heartbeat_path: Path | None
     target_host: str
     dispatch_mode: str
     max_inflight: int
@@ -51,6 +55,9 @@ class SenderConfig:
     request_log_flush_interval_sec: int
     response_mode: str
     verify_ssl: bool
+    worker_count: int
+    worker_index: int | None
+    quiet_worker_logs: bool
 
 
 def _get_int(env_name: str, default: int) -> int:
@@ -116,6 +123,18 @@ def load_runtime_config() -> SenderConfig:
     if connect_timeout_seconds <= 0:
         raise ValueError("CONNECT_TIMEOUT_SECONDS must be greater than 0")
 
+    worker_count = _get_int("WORKER_COUNT", 1)
+    if worker_count < 1:
+        raise ValueError("WORKER_COUNT must be at least 1")
+
+    worker_index = os.getenv("WORKER_INDEX")
+    if worker_index is None:
+        parsed_worker_index = None
+    else:
+        parsed_worker_index = int(worker_index)
+        if parsed_worker_index < 0 or parsed_worker_index >= worker_count:
+            raise ValueError("WORKER_INDEX must be in [0, WORKER_COUNT)")
+
     return SenderConfig(
         script_path=Path(os.getenv("SCRIPT_CSV_PATH", "/mnt/shares/test_script.csv")),
         request_report_path=Path(os.getenv("REQUEST_REPORT_PATH", "/mnt/shares/load_test_request_report.csv")),
@@ -126,6 +145,11 @@ def load_runtime_config() -> SenderConfig:
             os.getenv("INCIDENT_REPORT_PATH", "/mnt/shares/load_test_incident_report.csv")
         ),
         metadata_path=Path(os.getenv("METADATA_PATH", "/mnt/shares/load_test_metadata.csv")),
+        heartbeat_path=(
+            Path(os.environ["HEARTBEAT_PATH"])
+            if os.getenv("HEARTBEAT_PATH")
+            else None
+        ),
         target_host=target_host,
         dispatch_mode=dispatch_mode,
         max_inflight=max_inflight,
@@ -137,6 +161,9 @@ def load_runtime_config() -> SenderConfig:
         request_log_flush_interval_sec=request_log_flush_interval_sec,
         response_mode=response_mode,
         verify_ssl=_get_bool("REQUEST_SSL_VERIFY", True),
+        worker_count=worker_count,
+        worker_index=parsed_worker_index,
+        quiet_worker_logs=_get_bool("QUIET_WORKER_LOGS", False),
     )
 
 
@@ -388,6 +415,7 @@ class LoadSender:
 
         self.inflight_tasks: set[asyncio.Task[None]] = set()
         self.stop_requested = asyncio.Event()
+        self.second_request_offsets = self._build_second_request_offsets()
 
         self.total_points = len(self.timeline)
         self.total_planned_requests = sum(point.requests for point in self.timeline)
@@ -413,6 +441,48 @@ class LoadSender:
         self._last_flush_monotonic = 0.0
         self._previous_loop_exception_handler = None
 
+    def _heartbeat_payload(self) -> dict[str, int | bool]:
+        return {
+            "total_points": self.total_points,
+            "total_planned_requests": self.total_planned_requests,
+            "dispatched_seconds": self.dispatched_seconds,
+            "planned_requests_so_far": self.planned_requests_so_far,
+            "scheduled_requests": self.scheduled_requests,
+            "enqueued_requests": self.enqueued_requests,
+            "started_requests": self.started_requests,
+            "started_immediate_requests": self.started_immediate_requests,
+            "started_from_backlog_requests": self.started_from_backlog_requests,
+            "completed_requests": self.completed_requests,
+            "failed_requests": self.failed_requests,
+            "timed_out_requests": self.timed_out_requests,
+            "dropped_due_to_capacity": self.dropped_due_to_capacity,
+            "dropped_backlog_full_requests": self.dropped_backlog_full_requests,
+            "backlog_expired_requests": self.backlog_expired_requests,
+            "inflight_count": self.inflight_count,
+            "backlog_depth": len(self.backlog_queue),
+            "backlog_max_depth": self.backlog_max_depth,
+            "done": self.scheduling_complete and not self.inflight_tasks and not self.backlog_queue,
+        }
+
+    def _write_heartbeat(self) -> None:
+        if self.config.heartbeat_path is None:
+            return
+
+        self.config.heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = self._heartbeat_payload()
+        temp_path = self.config.heartbeat_path.with_suffix(f"{self.config.heartbeat_path.suffix}.tmp")
+        with temp_path.open("w", encoding="utf-8") as heartbeat_file:
+            json.dump(payload, heartbeat_file, separators=(",", ":"))
+        temp_path.replace(self.config.heartbeat_path)
+
+    def _build_second_request_offsets(self) -> list[int]:
+        offsets: list[int] = []
+        running_total = 0
+        for point in self.timeline:
+            offsets.append(running_total)
+            running_total += point.requests
+        return offsets
+
     async def run(self) -> None:
         import aiohttp
 
@@ -420,12 +490,13 @@ class LoadSender:
         self.incident_writer.reset()
         self.run_started_at = datetime.now(timezone.utc)
         self.statistics_writer.reset(self.run_started_at)
-        self._write_metadata()
+        if self.config.worker_index is None:
+            self._write_metadata()
         self._install_signal_handlers()
 
         logger.info(
             "Starting custom sender with %s seconds and %s planned requests from %s using max_inflight=%s "
-            "backlog_capacity=%s backlog_max_age=%.3fs dispatch_mode=%s timeout=%.3fs target=%s",
+            "backlog_capacity=%s backlog_max_age=%.3fs dispatch_mode=%s timeout=%.3fs target=%s worker=%s/%s",
             self.total_points,
             self.total_planned_requests,
             self.config.script_path,
@@ -435,6 +506,8 @@ class LoadSender:
             self.config.dispatch_mode,
             self.config.request_timeout_seconds,
             self.config.target_host,
+            0 if self.config.worker_index is None else self.config.worker_index,
+            self.config.worker_count,
         )
         logger.info("Workload operations enabled: %s", ", ".join(self.workload_planner.operation_names()))
 
@@ -493,6 +566,7 @@ class LoadSender:
         self.report_writer.flush_closed(final=True)
         self.statistics_writer.flush_closed(final=True)
         self.incident_writer.flush()
+        self._write_heartbeat()
         logger.info(
             "Run complete: total_planned=%s planned_so_far=%s scheduled=%s enqueued=%s started=%s started_immediate=%s "
             "started_from_backlog=%s completed=%s failed=%s timed_out=%s dropped_capacity=%s dropped_backlog_full=%s "
@@ -534,14 +608,23 @@ class LoadSender:
     ) -> None:
         request_count = point.requests
         planned_second_bucket = self._wall_clock_bucket_for_script_second(second_index)
-        self.statistics_writer.record(planned_second_bucket, "planned", request_count)
-        self.planned_requests_so_far += request_count
+        second_base_offset = self.second_request_offsets[second_index]
+        assigned_request_count = sum(
+            1
+            for request_index in range(request_count)
+            if self._should_handle_request(second_base_offset + request_index)
+        )
+        self.statistics_writer.record(planned_second_bucket, "planned", assigned_request_count)
+        self.planned_requests_so_far += assigned_request_count
         if request_count <= 0:
             return
 
         if self.config.dispatch_mode == "burst" or request_count == 1:
             for request_index in range(request_count):
-                self._launch_or_backlog(session, second_index, request_index)
+                global_request_index = second_base_offset + request_index
+                if not self._should_handle_request(global_request_index):
+                    continue
+                self._launch_or_backlog(session, second_index, request_index, global_request_index)
         else:
             loop = asyncio.get_running_loop()
             second_start = start_monotonic + float(second_index)
@@ -550,23 +633,31 @@ class LoadSender:
                 remaining = scheduled_at - loop.time()
                 if remaining > 0:
                     await asyncio.sleep(remaining)
-                self._launch_or_backlog(session, second_index, request_index)
+                global_request_index = second_base_offset + request_index
+                if not self._should_handle_request(global_request_index):
+                    continue
+                self._launch_or_backlog(session, second_index, request_index, global_request_index)
 
         self._flush_request_report_if_due()
+
+    def _should_handle_request(self, global_request_index: int) -> bool:
+        if self.config.worker_index is None:
+            return True
+        return (global_request_index % self.config.worker_count) == self.config.worker_index
 
     def _launch_or_backlog(
         self,
         session: "aiohttp.ClientSession",
         second_index: int,
         request_index: int,
+        global_request_index: int,
     ) -> None:
         second_bucket = _second_bucket_now()
-        scheduled_index = self.scheduled_requests
         self.scheduled_requests += 1
         self.statistics_writer.record(second_bucket, "scheduled")
 
         request = self.workload_planner.build_request(
-            scheduled_index=scheduled_index,
+            scheduled_index=global_request_index,
             second_index=second_index,
             request_index_within_second=request_index,
         )
@@ -708,31 +799,33 @@ class LoadSender:
             self.report_writer.flush_closed()
             self.statistics_writer.flush_closed()
             self.incident_writer.flush()
+            self._write_heartbeat()
             percentage = (self.dispatched_seconds / max(self.total_points, 1)) * 100
-            logger.info(
-                "Progress %.1f%% (%s/%s seconds) total_planned=%s planned_so_far=%s scheduled=%s enqueued=%s started=%s "
-                "started_immediate=%s started_from_backlog=%s completed=%s failed=%s timed_out=%s dropped_capacity=%s "
-                "dropped_backlog_full=%s backlog_expired=%s inflight=%s backlog_depth=%s backlog_max_depth=%s",
-                percentage,
-                self.dispatched_seconds,
-                self.total_points,
-                self.total_planned_requests,
-                self.planned_requests_so_far,
-                self.scheduled_requests,
-                self.enqueued_requests,
-                self.started_requests,
-                self.started_immediate_requests,
-                self.started_from_backlog_requests,
-                self.completed_requests,
-                self.failed_requests,
-                self.timed_out_requests,
-                self.dropped_due_to_capacity,
-                self.dropped_backlog_full_requests,
-                self.backlog_expired_requests,
-                self.inflight_count,
-                len(self.backlog_queue),
-                self.backlog_max_depth,
-            )
+            if not self.config.quiet_worker_logs:
+                logger.info(
+                    "Progress %.1f%% (%s/%s seconds) total_planned=%s planned_so_far=%s scheduled=%s enqueued=%s started=%s "
+                    "started_immediate=%s started_from_backlog=%s completed=%s failed=%s timed_out=%s dropped_capacity=%s "
+                    "dropped_backlog_full=%s backlog_expired=%s inflight=%s backlog_depth=%s backlog_max_depth=%s",
+                    percentage,
+                    self.dispatched_seconds,
+                    self.total_points,
+                    self.total_planned_requests,
+                    self.planned_requests_so_far,
+                    self.scheduled_requests,
+                    self.enqueued_requests,
+                    self.started_requests,
+                    self.started_immediate_requests,
+                    self.started_from_backlog_requests,
+                    self.completed_requests,
+                    self.failed_requests,
+                    self.timed_out_requests,
+                    self.dropped_due_to_capacity,
+                    self.dropped_backlog_full_requests,
+                    self.backlog_expired_requests,
+                    self.inflight_count,
+                    len(self.backlog_queue),
+                    self.backlog_max_depth,
+                )
 
     def _flush_request_report_if_due(self) -> None:
         now = asyncio.get_running_loop().time()
@@ -847,6 +940,8 @@ class LoadSender:
 
 def configure_logging() -> None:
     log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+    if _get_bool("QUIET_WORKER_LOGS", False):
+        log_level = "WARNING"
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -861,9 +956,263 @@ async def async_main() -> int:
     return 0
 
 
+def _write_metadata(
+    metadata_path: Path,
+    script_path: Path,
+    timeline: list[ScriptPoint],
+    run_started_at: datetime,
+) -> None:
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    run_start_second = run_started_at.replace(microsecond=0)
+    with metadata_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(
+            [
+                "run_start_time",
+                "run_start_second",
+                "script_path",
+                "script_start_time",
+                "script_end_time",
+                "script_seconds",
+                "planned_requests",
+            ]
+        )
+        writer.writerow(
+            [
+                run_started_at.isoformat(),
+                run_start_second.isoformat(),
+                str(script_path),
+                timeline[0].timestamp.isoformat(),
+                timeline[-1].timestamp.isoformat(),
+                len(timeline),
+                sum(point.requests for point in timeline),
+            ]
+        )
+
+
+def _worker_output_path(base_path: Path, worker_index: int) -> Path:
+    return base_path.with_name(f"{base_path.stem}.worker{worker_index}{base_path.suffix}")
+
+
+def _read_heartbeat(path: Path) -> dict[str, int | bool] | None:
+    if not path.exists():
+        return None
+
+    try:
+        with path.open(encoding="utf-8") as heartbeat_file:
+            return json.load(heartbeat_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _log_aggregated_worker_progress(heartbeat_paths: list[Path]) -> None:
+    heartbeats = [heartbeat for path in heartbeat_paths if (heartbeat := _read_heartbeat(path)) is not None]
+    if not heartbeats:
+        return
+
+    total_points = max(int(heartbeat["total_points"]) for heartbeat in heartbeats)
+    dispatched_seconds = max(int(heartbeat["dispatched_seconds"]) for heartbeat in heartbeats)
+    total_planned_requests = max(int(heartbeat["total_planned_requests"]) for heartbeat in heartbeats)
+    planned_requests_so_far = sum(int(heartbeat["planned_requests_so_far"]) for heartbeat in heartbeats)
+    scheduled_requests = sum(int(heartbeat["scheduled_requests"]) for heartbeat in heartbeats)
+    enqueued_requests = sum(int(heartbeat["enqueued_requests"]) for heartbeat in heartbeats)
+    started_requests = sum(int(heartbeat["started_requests"]) for heartbeat in heartbeats)
+    started_immediate_requests = sum(int(heartbeat["started_immediate_requests"]) for heartbeat in heartbeats)
+    started_from_backlog_requests = sum(int(heartbeat["started_from_backlog_requests"]) for heartbeat in heartbeats)
+    completed_requests = sum(int(heartbeat["completed_requests"]) for heartbeat in heartbeats)
+    failed_requests = sum(int(heartbeat["failed_requests"]) for heartbeat in heartbeats)
+    timed_out_requests = sum(int(heartbeat["timed_out_requests"]) for heartbeat in heartbeats)
+    dropped_due_to_capacity = sum(int(heartbeat["dropped_due_to_capacity"]) for heartbeat in heartbeats)
+    dropped_backlog_full_requests = sum(int(heartbeat["dropped_backlog_full_requests"]) for heartbeat in heartbeats)
+    backlog_expired_requests = sum(int(heartbeat["backlog_expired_requests"]) for heartbeat in heartbeats)
+    inflight_count = sum(int(heartbeat["inflight_count"]) for heartbeat in heartbeats)
+    backlog_depth = sum(int(heartbeat["backlog_depth"]) for heartbeat in heartbeats)
+    backlog_max_depth = sum(int(heartbeat["backlog_max_depth"]) for heartbeat in heartbeats)
+
+    percentage = (dispatched_seconds / max(total_points, 1)) * 100
+    logger.info(
+        "Progress %.1f%% (%s/%s seconds) total_planned=%s planned_so_far=%s scheduled=%s enqueued=%s started=%s "
+        "started_immediate=%s started_from_backlog=%s completed=%s failed=%s timed_out=%s dropped_capacity=%s "
+        "dropped_backlog_full=%s backlog_expired=%s inflight=%s backlog_depth=%s backlog_max_depth=%s",
+        percentage,
+        dispatched_seconds,
+        total_points,
+        total_planned_requests,
+        planned_requests_so_far,
+        scheduled_requests,
+        enqueued_requests,
+        started_requests,
+        started_immediate_requests,
+        started_from_backlog_requests,
+        completed_requests,
+        failed_requests,
+        timed_out_requests,
+        dropped_due_to_capacity,
+        dropped_backlog_full_requests,
+        backlog_expired_requests,
+        inflight_count,
+        backlog_depth,
+        backlog_max_depth,
+    )
+
+
+def _merge_request_reports(input_paths: list[Path], output_path: Path) -> None:
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    for input_path in input_paths:
+        if not input_path.exists():
+            continue
+        with input_path.open(newline="", encoding="utf-8") as csv_file:
+            reader = csv.DictReader(csv_file)
+            for row in reader:
+                counts[(row["second"], row["url"])] += int(row["count"])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["second", "url", "count"])
+        for (second, url), count in sorted(counts.items()):
+            writer.writerow([second, url, count])
+
+
+def _merge_statistics_reports(input_paths: list[Path], output_path: Path) -> None:
+    totals: dict[str, dict[str, int]] = defaultdict(lambda: {name: 0 for name in StatisticsReportWriter.COLUMN_NAMES})
+    for input_path in input_paths:
+        if not input_path.exists():
+            continue
+        with input_path.open(newline="", encoding="utf-8") as csv_file:
+            reader = csv.DictReader(csv_file)
+            for row in reader:
+                second = row["second"]
+                for column_name in StatisticsReportWriter.COLUMN_NAMES:
+                    totals[second][column_name] += int(row[column_name])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["second", *StatisticsReportWriter.COLUMN_NAMES])
+        for second in sorted(totals):
+            writer.writerow([second, *(totals[second][column_name] for column_name in StatisticsReportWriter.COLUMN_NAMES)])
+
+
+def _merge_incident_reports(input_paths: list[Path], output_path: Path) -> None:
+    rows: list[tuple[str, str, str, str, str]] = []
+    for input_path in input_paths:
+        if not input_path.exists():
+            continue
+        with input_path.open(newline="", encoding="utf-8") as csv_file:
+            reader = csv.DictReader(csv_file)
+            for row in reader:
+                rows.append((row["timestamp"], row["second"], row["url"], row["incident_type"], row["message"]))
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["timestamp", "second", "url", "incident_type", "message"])
+        for row in sorted(rows):
+            writer.writerow(row)
+
+
+def _merge_worker_outputs_live(
+    request_paths: list[Path],
+    statistics_paths: list[Path],
+    incident_paths: list[Path],
+    request_output_path: Path,
+    statistics_output_path: Path,
+    incident_output_path: Path,
+) -> None:
+    _merge_request_reports(request_paths, request_output_path)
+    _merge_statistics_reports(statistics_paths, statistics_output_path)
+    _merge_incident_reports(incident_paths, incident_output_path)
+
+
+def _run_multi_worker() -> int:
+    config = load_runtime_config()
+    timeline = load_script_points(config.script_path)
+    run_started_at = datetime.now(timezone.utc)
+    _write_metadata(config.metadata_path, config.script_path, timeline, run_started_at)
+
+    worker_processes: list[subprocess.Popen] = []
+    request_paths: list[Path] = []
+    statistics_paths: list[Path] = []
+    incident_paths: list[Path] = []
+    heartbeat_paths: list[Path] = []
+
+    for worker_index in range(config.worker_count):
+        worker_request_path = _worker_output_path(config.request_report_path, worker_index)
+        worker_statistics_path = _worker_output_path(config.statistics_report_path, worker_index)
+        worker_incident_path = _worker_output_path(config.incident_report_path, worker_index)
+        worker_heartbeat_path = _worker_output_path(
+            config.statistics_report_path.with_name("load_test_worker_heartbeat.json"),
+            worker_index,
+        )
+
+        request_paths.append(worker_request_path)
+        statistics_paths.append(worker_statistics_path)
+        incident_paths.append(worker_incident_path)
+        heartbeat_paths.append(worker_heartbeat_path)
+
+        env = os.environ.copy()
+        env["WORKER_INDEX"] = str(worker_index)
+        env["WORKER_COUNT"] = str(config.worker_count)
+        env["REQUEST_REPORT_PATH"] = str(worker_request_path)
+        env["STATISTICS_REPORT_PATH"] = str(worker_statistics_path)
+        env["INCIDENT_REPORT_PATH"] = str(worker_incident_path)
+        env["METADATA_PATH"] = str(config.metadata_path)
+        env["HEARTBEAT_PATH"] = str(worker_heartbeat_path)
+        env["QUIET_WORKER_LOGS"] = "true"
+
+        worker_processes.append(
+            subprocess.Popen(
+                [sys.executable, "-u", str(Path(__file__).resolve())],
+                env=env,
+            )
+        )
+
+    while True:
+        if all(process.poll() is not None for process in worker_processes):
+            break
+        time.sleep(config.progress_log_interval_sec)
+        _merge_worker_outputs_live(
+            request_paths=request_paths,
+            statistics_paths=statistics_paths,
+            incident_paths=incident_paths,
+            request_output_path=config.request_report_path,
+            statistics_output_path=config.statistics_report_path,
+            incident_output_path=config.incident_report_path,
+        )
+        _log_aggregated_worker_progress(heartbeat_paths)
+
+    _merge_worker_outputs_live(
+        request_paths=request_paths,
+        statistics_paths=statistics_paths,
+        incident_paths=incident_paths,
+        request_output_path=config.request_report_path,
+        statistics_output_path=config.statistics_report_path,
+        incident_output_path=config.incident_report_path,
+    )
+    _log_aggregated_worker_progress(heartbeat_paths)
+    exit_codes = [process.wait() for process in worker_processes]
+
+    for path in [*request_paths, *statistics_paths, *incident_paths, *heartbeat_paths]:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    if any(code != 0 for code in exit_codes):
+        logger.error("One or more worker processes failed: exit_codes=%s", exit_codes)
+        return 1
+    logger.info("Merged %s worker reports into %s", config.worker_count, config.request_report_path.parent)
+    return 0
+
+
 def main() -> int:
     configure_logging()
     try:
+        config = load_runtime_config()
+        if config.worker_count > 1 and config.worker_index is None:
+            logger.info("Launching %s worker processes for sharded generator test", config.worker_count)
+            return _run_multi_worker()
         return asyncio.run(async_main())
     except KeyboardInterrupt:
         logger.warning("Interrupted by user.")

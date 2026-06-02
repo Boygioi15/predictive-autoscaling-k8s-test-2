@@ -39,14 +39,22 @@ This sender does not create virtual users or scenarios.
 Instead, it uses:
 
 - one scheduler clock
-- one bounded in-flight token pool
-- one async HTTP client session
+- one bounded in-flight token pool per worker process
+- one async HTTP client session per worker process
 
 So the controlling resource is not "how many VUs are initialized", but:
 
 - how many request slots are allowed to be in flight at once
 
 That is `MAX_INFLIGHT`.
+
+When `WORKER_COUNT > 1`, the sender launches multiple Python worker processes. Each worker:
+
+- gets its own event loop
+- gets its own token pool sized by `MAX_INFLIGHT`
+- handles a deterministic shard of the global request stream
+
+This is the intended way to use more CPU cores on the generator side, since a single `asyncio` process mostly runs on one core.
 
 ## Execution Model
 
@@ -116,6 +124,162 @@ The design choice here is:
 
 - do not hide overload behind backlog
 - make missed capacity visible immediately
+
+With multiple workers enabled, this bounded dispatch happens independently inside each worker process. Effective total in-flight capacity becomes approximately:
+
+- `WORKER_COUNT * MAX_INFLIGHT`
+
+and each worker only sees the requests assigned to its shard.
+
+## Multi-Worker Implementation
+
+`WORKER_COUNT` does not create Python threads.
+
+It creates multiple **Python worker processes**.
+
+That choice is intentional:
+
+- one `asyncio` process mostly runs on one CPU core
+- Python threads would still share one interpreter process
+- separate processes give separate event loops and much better multi-core use
+
+The implementation works like this.
+
+### 1. Parent launcher
+
+When:
+
+- `WORKER_COUNT > 1`
+- and `WORKER_INDEX` is not set
+
+the main process becomes a launcher.
+
+It:
+
+- loads the normalized CSV timeline once
+- writes the shared metadata file once
+- spawns `WORKER_COUNT` child processes
+- gives each child its own temporary report paths
+- waits for all children to finish
+- merges child reports into the normal final output files
+
+So the parent is only an orchestrator. It does not send HTTP requests itself in this mode.
+
+### 2. Worker identity
+
+Each child process gets:
+
+- `WORKER_INDEX`
+- `WORKER_COUNT`
+
+For example, with `WORKER_COUNT=4`, the children run as:
+
+- worker `0`
+- worker `1`
+- worker `2`
+- worker `3`
+
+Each worker still runs the same sender code. The only difference is which requests it is responsible for.
+
+### 3. Deterministic request sharding
+
+The full script trace is treated as one global request stream.
+
+Each request has a deterministic global request index:
+
+- `global_request_index`
+
+computed from:
+
+- all requests in earlier script seconds
+- plus the request position within the current second
+
+Then sharding is:
+
+- worker handles request if `global_request_index % WORKER_COUNT == WORKER_INDEX`
+
+So with 4 workers:
+
+- worker 0 handles indices `0, 4, 8, ...`
+- worker 1 handles indices `1, 5, 9, ...`
+- worker 2 handles indices `2, 6, 10, ...`
+- worker 3 handles indices `3, 7, 11, ...`
+
+This gives:
+
+- stable assignment across runs
+- even distribution of requests
+- deterministic workload generation per worker
+
+### 4. Per-worker sender resources
+
+Each worker process creates its own:
+
+- `asyncio` event loop
+- `aiohttp.ClientSession`
+- inflight token pool
+- backlog queue
+- progress logger
+
+This means the worker resources are **not shared**.
+
+So if:
+
+- `WORKER_COUNT=4`
+- `MAX_INFLIGHT=500`
+
+then total effective in-flight budget is about:
+
+- `4 * 500 = 2000`
+
+The same rule applies to backlog:
+
+- `BACKLOG_CAPACITY` is also per worker
+
+So multi-worker runs should usually reduce those per-worker values if you want to keep total pressure similar to the single-worker baseline.
+
+### 5. Per-worker temporary outputs
+
+Each worker writes to temporary files such as:
+
+- `load_test_request_report.worker0.csv`
+- `load_test_request_report.worker1.csv`
+
+and similarly for:
+
+- statistics report
+- incident report
+
+This avoids workers writing into the same CSV at the same time.
+
+### 6. Merge step
+
+After all workers exit, the parent merges the temporary files:
+
+- request report rows are summed by `(second, url)`
+- statistics report rows are summed by `second`
+- incident report rows are concatenated and sorted
+
+Then the merged results are written back to the normal final outputs:
+
+- `load_test_request_report.csv`
+- `load_test_statistics_report.csv`
+- `load_test_incident_report.csv`
+
+Finally, the temporary worker files are removed.
+
+### 7. Metadata handling
+
+The metadata file is written only by the parent launcher in multi-worker mode.
+
+Child workers do not rewrite it.
+
+This keeps:
+
+- one consistent run start time
+- one consistent script summary
+
+instead of having workers race to overwrite shared metadata.
 
 ### 5. Optional bounded backlog
 

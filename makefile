@@ -31,6 +31,7 @@ start:
 	# Now apply your ingress rules
 	- kubectl apply -f k8s/ingress-frontend.yaml
 	- kubectl apply -f k8s/ingress-backend.yaml
+	- kubectl apply -f k8s/ingress-healthz.yaml
 
 
 	#remember to change expose the ingress-nginx-controller svc. -- kubectl get svc -n ingress-nginx
@@ -43,6 +44,7 @@ deploy-service:
 	- kubectl apply -f k8s/frontend-service.yaml
 	- kubectl apply -f k8s/ingress-frontend.yaml
 	- kubectl apply -f k8s/ingress-backend.yaml
+	- kubectl apply -f k8s/ingress-healthz.yaml
 deploy-forecasting-service:
 	- kubectl apply -f ./k8s/forecasting-service.yaml
 restart-forecasting-service:
@@ -87,20 +89,14 @@ open-grafana:
 	- kubectl port-forward svc/monitoring-stack-grafana 3000:80 -n monitoring
 open-prometheus: 
 	- kubectl port-forward prometheus-monitoring-stack-kube-prom-prometheus-0  9090:9090 -n monitoring
-restart-locust: 
-	docker compose restart locust
-deploy-locust: 
-	docker compose up -d locust
-open-locust: 
-	@echo "Locust UI: http://localhost:8089"
+
 run-custom-load-test:
 	docker compose run --rm custom-load-test
 ingress-request-counts:
 	python3 helper/summarize_ingress_logs.py --input shares/ingress_raw.log --output shares/ingress_request_report.csv
 capture-ingress-raw-logs:
 	sh helper/capture_ingress_raw_logs.sh shares/ingress_raw.log
-watch-ingress-request-counts:
-	sh helper/watch_ingress_request_counts.sh ingress-backend shares/ingress_request_report.csv
+
 
 #curl -X PUT http://localhost:1208?n=5
 #### 2. Makefile for managing Minikube cluster and services with cgroup adjustments
@@ -111,3 +107,16 @@ start-environment:
 stop-environment: 
 	minikube -p=thesis stop
 	bash ./linux-script/release-cpu-frequency.sh
+
+
+watch-ingress-request-counts:
+	sh helper/watch_ingress_request_counts.sh ingress-backend shares/ingress_request_report.csv
+
+	restart-locust: 
+	docker compose restart locust
+deploy-locust: 
+	docker compose up -d locust
+open-locust: 
+	@echo "Locust UI: http://localhost:8089"
+
+# scp k3s-master:~/predictive-autoscaling-k8s-test/shares/ingress_request_report.csv ~/predictive-autoscaling-k8s-test/shares/ingress_request_report.csv

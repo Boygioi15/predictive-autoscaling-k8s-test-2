@@ -28,3 +28,11 @@ spec:
                 name: text-service
                 port:
                   number: 8080
+          # Rule cho IO
+          - path: /api/io/(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: io-service
+                port:
+                  number: 8080

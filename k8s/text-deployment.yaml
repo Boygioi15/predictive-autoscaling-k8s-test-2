@@ -27,3 +27,11 @@ spec:
           # CỔNG CỦA CONTAINER
           ports:
             - containerPort: 3000 # CHỈ MANG TÍNH CHẤT THÔNG BÁO! Ứng dụng bên trong lắng nghe ở cổng này
+          
+          resources:
+            limits:
+              cpu: "600m"
+              memory: "512Mi"
+            requests:
+              cpu: "250m"
+              memory: "256Mi"

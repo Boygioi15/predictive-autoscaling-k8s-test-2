@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: io-service-deployment
+  labels:
+    app: io-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: io-service
+  template:
+    metadata:
+      labels:
+        app: io-service
+    spec:
+      containers:
+        - name: io-service-container
+          image: docker.io/boygioi/io-service:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: IO_STORAGE_PATH
+              value: /data/io-workspace
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: io-workspace
+              mountPath: /data/io-workspace
+      volumes:
+        - name: io-workspace
+          emptyDir:
+            sizeLimit: 64Mi
