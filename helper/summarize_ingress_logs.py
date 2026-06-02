@@ -42,6 +42,18 @@ def _open_input(input_path: str):
     return open(input_path, encoding="utf-8")
 
 
+def _extract_json_payload(raw_line: str) -> str | None:
+    line = raw_line.strip()
+    if not line:
+        return None
+
+    json_start = line.find("{")
+    if json_start < 0:
+        return None
+
+    return line[json_start:]
+
+
 def _second_bucket(value: str) -> str:
     timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return timestamp.replace(microsecond=0).isoformat()
@@ -77,8 +89,8 @@ def _stream_counts(input_handle, output_path: Path, ingress_name: str) -> None:
     _write_header(output_path)
 
     for raw_line in input_handle:
-        line = raw_line.strip()
-        if not line or not line.startswith("{"):
+        line = _extract_json_payload(raw_line)
+        if line is None:
             continue
 
         try:
@@ -121,8 +133,8 @@ def main() -> int:
 
         counts: dict[str, int] = defaultdict(int)
         for raw_line in input_handle:
-            line = raw_line.strip()
-            if not line or not line.startswith("{"):
+            line = _extract_json_payload(raw_line)
+            if line is None:
                 continue
 
             try:

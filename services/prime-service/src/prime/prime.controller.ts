@@ -3,19 +3,11 @@ import { PrimeService } from './prime.service';
 
 @Controller()
 export class PrimeController {
-  // simple in-memory counter for each route
-  private static routeCounts = { range: 0, kth: 0, check: 0 };
-
   constructor(private readonly primeService: PrimeService) {}
 
-  // API 1: /prime/range?n=100000
   @Get('range')
   async getPrimesCountInRange(@Query('n') n: string) {
-    // increment and log counter
-    PrimeController.routeCounts.range++;
-    console.log(`[prime/range] called ${PrimeController.routeCounts.range} times with n=${n}`);
-
-    const num = parseInt(n);
+    const num = parseInt(n, 10);
     if (isNaN(num) || num < 0)
       throw new BadRequestException('N phải là số dương');
 
@@ -26,18 +18,14 @@ export class PrimeController {
     const end = Date.now();
     return {
       input: num,
-      totalPrimesFound: count, // Trả về số lượng
-      timeTaken: `${end - start}ms`, // Thời gian CPU xử lý
+      totalPrimesFound: count,
+      timeTaken: `${end - start}ms`,
     };
   }
 
-  // API 2: /prime/kth (Giữ nguyên)
   @Get('kth')
   async getKthPrime(@Query('k') k: string) {
-    PrimeController.routeCounts.kth++;
-    console.log(`[prime/kth] called ${PrimeController.routeCounts.kth} times with k=${k}`);
-
-    const num = parseInt(k);
+    const num = parseInt(k, 10);
     if (isNaN(num) || num <= 0)
       throw new BadRequestException('K phải là số dương > 0');
 
@@ -52,13 +40,9 @@ export class PrimeController {
     };
   }
 
-  // API 3: /prime/check (Giữ nguyên)
   @Get('check')
   async checkPrime(@Query('n') n: string) {
-    PrimeController.routeCounts.check++;
-    console.log(`[prime/check] called ${PrimeController.routeCounts.check} times with n=${n}`);
-
-    const num = parseInt(n);
+    const num = parseInt(n, 10);
     if (isNaN(num)) throw new BadRequestException('N phải là số');
 
     return this.primeService.checkIsPrime(num);
