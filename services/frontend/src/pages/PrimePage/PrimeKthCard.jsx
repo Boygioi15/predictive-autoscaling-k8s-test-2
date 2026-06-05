@@ -14,8 +14,6 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import primeApi from "@/api/primeApi";
 
-// Giả sử import SpinnerOverlay và primeApi
-
 const PrimeKthCard = () => {
   const [kInput, setKInput] = useState(0);
   const [kResult, setKResult] = useState(null);
@@ -24,7 +22,7 @@ const PrimeKthCard = () => {
 
   const getKthResult = async () => {
     if (!kInput || kInput <= 0) {
-      toast.error("Vui lòng nhập vị trí K lớn hơn 0");
+      toast.error("Please enter a K greater than 0");
       return;
     }
 
@@ -33,16 +31,14 @@ const PrimeKthCard = () => {
       setKResult(null);
       setKMetrics(null);
 
-      // Gọi API: /prime/kth?k=...
       const response = await primeApi.getKthPrime(kInput);
 
-      // Giả sử API trả về: { result: 3571, timeTaken: "15ms" }
       setKResult(response.data.result);
       setKMetrics({
         timeTaken: response.data.timeTaken,
       });
     } catch (error) {
-      toast.error("Lỗi khi tìm số thứ K");
+      toast.error("Failed to find the K-th prime");
       console.error(error);
     } finally {
       setKWaiting(false);
@@ -60,33 +56,35 @@ const PrimeKthCard = () => {
       <CardHeader>
         <div className="flex items-center gap-2">
           <Search className="w-5 h-5 text-orange-500" />
-          <CardTitle>Tìm số thứ K</CardTitle>
+          <CardTitle>K-th prime search</CardTitle>
         </div>
-        <CardDescription>Tìm số nguyên tố nằm ở vị trí thứ K.</CardDescription>
+        <CardDescription>Find the prime number at position K.</CardDescription>
       </CardHeader>
 
-      <CardContent className="space-y-4 flex-1">
+      <CardContent className="flex flex-1 flex-col gap-4">
         <div className="space-y-2">
-          <Label htmlFor="k-th">Nhập vị trí (K)</Label>
+          <Label htmlFor="k-th">Position (K)</Label>
           <Input
             id="k-th"
             type="number"
-            placeholder="VD: 500"
+            placeholder="e.g. 500"
             value={kInput}
             onChange={(e) => setKInput(Number(e.target.value))}
             disabled={kWaiting}
           />
         </div>
 
-        <div className="rounded-md bg-muted/50 text-sm min-h-[6rem] p-3 flex flex-col justify-center">
+        <div className="flex min-h-[8rem] flex-1 flex-col rounded-md bg-muted/50 p-3 text-sm">
           {kResult === null ? (
-            <div className="text-muted-foreground text-center">Kết quả...</div>
+            <div className="flex h-full flex-1 items-center justify-center text-center text-muted-foreground">
+              Results will appear here...
+            </div>
           ) : (
             <div className="space-y-3 animate-in fade-in zoom-in duration-300">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 font-medium">
                   <Hash className="w-4 h-4 text-orange-600" />
-                  <span>Kết quả:</span>
+                  <span>Result:</span>
                 </div>
                 <span className="text-orange-600 font-bold text-lg">
                   {kResult.toLocaleString()}
@@ -97,7 +95,7 @@ const PrimeKthCard = () => {
                 <div className="flex items-center justify-between text-xs text-muted-foreground border-t pt-2 border-slate-200 dark:border-slate-700">
                   <div className="flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5" />
-                    <span>Time taken:</span>
+                    <span>Processing time:</span>
                   </div>
                   <span className="font-mono font-semibold text-foreground">
                     {kMetrics.timeTaken}
@@ -116,7 +114,7 @@ const PrimeKthCard = () => {
           onClick={getKthResult}
           disabled={kWaiting}
         >
-          {kWaiting ? "Đang tìm..." : "Tìm kiếm"}
+          {kWaiting ? "Searching..." : "Search"}
         </Button>
       </CardFooter>
     </Card>

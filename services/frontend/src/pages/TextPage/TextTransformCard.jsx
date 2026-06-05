@@ -10,10 +10,10 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { FileText, HelpCircle, Repeat } from "lucide-react";
+import { HelpCircle, Repeat } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+
 const TextTransformCard = () => {
   const [text, setText] = useState("");
   const [rounds, setRounds] = useState(50);
@@ -22,7 +22,7 @@ const TextTransformCard = () => {
 
   const handleTransform = async () => {
     if (!text || text.length === 0) {
-      toast.error("Vui lòng nhập văn bản");
+      toast.error("Please enter text");
       return;
     }
 
@@ -33,7 +33,7 @@ const TextTransformCard = () => {
       const response = await textApi.transformText(text, rounds);
       setResult(response.data);
     } catch (err) {
-      toast.error("Lỗi khi xử lý văn bản");
+      toast.error("Failed to transform text");
       console.error(err);
     } finally {
       setLoading(false);
@@ -51,18 +51,19 @@ const TextTransformCard = () => {
       <CardHeader>
         <div className="flex items-center gap-2">
           <Repeat className="w-5 h-5 text-purple-500" />
-          <CardTitle>Biến đổi văn bản</CardTitle>
+          <CardTitle>Text transformation</CardTitle>
         </div>
         <CardDescription>
-          Đảo chuỗi & xử lý lặp nhiều vòng để tạo CPU load.
+          Reverse the string and process it for multiple rounds to create CPU
+          load.
         </CardDescription>
       </CardHeader>
 
-      <CardContent className="space-y-4 flex-1">
+      <CardContent className="flex flex-1 flex-col gap-4">
         <div className="space-y-2">
-          <Label>Văn bản</Label>
+          <Label>Text</Label>
           <Input
-            placeholder="VD: Hello World"
+            placeholder="e.g. Hello World"
             value={text}
             onChange={(e) => setText(e.target.value)}
             disabled={loading}
@@ -70,7 +71,7 @@ const TextTransformCard = () => {
         </div>
 
         <div className="space-y-2">
-          <Label>Số vòng xử lý (rounds)</Label>
+          <Label>Processing rounds</Label>
           <Input
             type="number"
             value={rounds}
@@ -79,21 +80,21 @@ const TextTransformCard = () => {
           />
         </div>
 
-        <div className="rounded-md bg-muted/50 text-sm min-h-[6rem] p-3 flex flex-col justify-center">
+        <div className="flex min-h-[8rem] flex-1 flex-col rounded-md bg-muted/50 p-3 text-sm">
           {result === null ? (
-            <div className="text-muted-foreground flex gap-2 items-center justify-center">
-              <HelpCircle className="w-4 h-4" /> Chưa có kết quả
+            <div className="flex h-full flex-1 items-center justify-center gap-2 text-center text-muted-foreground">
+              <HelpCircle className="w-4 h-4" /> No results yet
             </div>
           ) : (
             <div className="animate-in fade-in zoom-in duration-300 space-y-1">
               <div>
-                📏 Độ dài input: <b>{result.originalLength}</b>
+                📏 Input length: <b>{result.originalLength}</b>
               </div>
               <div>
-                🔁 Số vòng: <b>{result.rounds}</b>
+                🔁 Rounds: <b>{result.rounds}</b>
               </div>
               <div>
-                ⏱ Thời gian: <b>{result.timeTaken}</b>
+                ⏱ Processing time: <b>{result.timeTaken}</b>
               </div>
             </div>
           )}
@@ -107,7 +108,7 @@ const TextTransformCard = () => {
           onClick={handleTransform}
           disabled={loading}
         >
-          {loading ? "Đang xử lý..." : "Thực hiện"}
+          {loading ? "Processing..." : "Run transformation"}
         </Button>
       </CardFooter>
     </Card>

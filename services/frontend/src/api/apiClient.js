@@ -15,7 +15,7 @@ export const axiosClient_Text = axios.create({
   timeout: 100000,
 });
 export const axiosClient_IO = axios.create({
-  baseURL: "/api/text",
+  baseURL: "/api/io",
   headers: {
     "Content-Type": "application/json",
   },

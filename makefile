@@ -4,10 +4,12 @@ autoscale-prime:
 build-service: 
 	docker build -t docker.io/boygioi/prime-service:latest ./services/prime-service
 	docker build -t docker.io/boygioi/text-service:latest ./services/text-service
+	docker build -t docker.io/boygioi/io-service:latest ./services/io-service
 	docker build -t docker.io/boygioi/frontend-service:latest ./services/frontend
 push-service: 
 	docker push docker.io/boygioi/prime-service:latest
 	docker push docker.io/boygioi/text-service:latest
+	docker push docker.io/boygioi/io-service:latest
 	docker push docker.io/boygioi/frontend-service:latest
 build-locust: 
 	docker compose build locust
@@ -22,6 +24,8 @@ start:
 	- kubectl apply -f k8s/prime-service.yaml
 	- kubectl apply -f k8s/text-deployment.yaml
 	- kubectl apply -f k8s/text-service.yaml
+	- kubectl apply -f k8s/io-deployment.yaml
+	- kubectl apply -f k8s/io-service.yaml
 	- kubectl apply -f k8s/frontend-deployment.yaml 
 	- kubectl apply -f k8s/frontend-service.yaml
 
@@ -40,6 +44,8 @@ deploy-service:
 	- kubectl apply -f k8s/prime-service.yaml
 	- kubectl apply -f k8s/text-deployment.yaml
 	- kubectl apply -f k8s/text-service.yaml
+	- kubectl apply -f k8s/io-deployment.yaml
+	- kubectl apply -f k8s/io-service.yaml
 	- kubectl apply -f k8s/frontend-deployment.yaml
 	- kubectl apply -f k8s/frontend-service.yaml
 	- kubectl apply -f k8s/ingress-frontend.yaml
@@ -54,6 +60,7 @@ restart-forecasting-service:
 restart-service: 
 	- kubectl rollout restart deployment prime-service-deployment
 	- kubectl rollout restart deployment text-service-deployment
+	- kubectl rollout restart deployment io-service-deployment
 	- kubectl rollout restart deployment frontend-deployment
 install-helm-monitor: 
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts

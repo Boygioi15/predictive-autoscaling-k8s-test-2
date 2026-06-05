@@ -1,9 +1,9 @@
 import React from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import { Cpu, FileText, Database, Activity } from "lucide-react";
-import { cn } from "@/lib/utils"; // Hàm utility của shadcn
+import { cn } from "@/lib/utils"; // shadcn utility helper
 
-// Component con hiển thị từng link trong sidebar
+// Child component for each sidebar link
 const SidebarItem = ({ to, icon: Icon, label }) => (
   <NavLink
     to={to}
@@ -24,10 +24,10 @@ const SidebarItem = ({ to, icon: Icon, label }) => (
 const RootLayout = () => {
   return (
     <div className="grid min-h-screen w-full md:grid-cols-[220px_1fr] lg:grid-cols-[280px_1fr]">
-      {/* Sidebar (Cột bên trái) */}
+      {/* Sidebar */}
       <div className="hidden border-r bg-muted/40 md:block">
         <div className="flex h-full max-h-screen flex-col gap-2">
-          {/* Logo / Tiêu đề */}
+          {/* Logo / Title */}
           <div className="flex h-14 items-center border-b px-4 lg:h-[60px] lg:px-6">
             <div className="flex items-center gap-2 font-semibold">
               <Activity className="h-6 w-6" />
@@ -35,16 +35,16 @@ const RootLayout = () => {
             </div>
           </div>
 
-          {/* Menu Navigation */}
+          {/* Menu navigation */}
           <div className="flex-1">
             <nav className="grid items-start px-2 text-sm font-medium lg:px-4 mt-4">
-              <SidebarItem to="/prime" icon={Cpu} label="Số nguyên tố" />
-              <SidebarItem to="/text" icon={FileText} label="Xử lý text" />
-              <SidebarItem to="/io" icon={Database} label="Đợi I/O" />
+              <SidebarItem to="/prime" icon={Cpu} label="Prime Numbers" />
+              <SidebarItem to="/text" icon={FileText} label="Text Processing" />
+              <SidebarItem to="/io" icon={Database} label="I/O Tasks" />
             </nav>
           </div>
 
-          {/* Footer Sidebar */}
+          {/* Sidebar footer */}
           <div className="mt-auto p-4">
             <div className="text-xs text-muted-foreground text-center">
               Thesis Project 2026
@@ -53,14 +53,14 @@ const RootLayout = () => {
         </div>
       </div>
 
-      {/* Main Content (Phần nội dung bên phải) */}
+      {/* Main content */}
       <div className="flex flex-col">
-        {/* Header Mobile (Có thể thêm nút toggle sidebar ở đây) */}
+        {/* Mobile header */}
         <header className="flex h-14 items-center gap-4 border-b bg-muted/40 px-6 lg:h-[60px]">
           <h1 className="text-lg font-semibold">Dashboard Monitor</h1>
         </header>
 
-        {/* Nơi nội dung thay đổi sẽ hiển thị */}
+        {/* Routed content */}
         <main className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
           <div className="rounded-lg border border-dashed shadow-sm p-4 min-h-[500px]">
             <Outlet />

@@ -21,7 +21,7 @@ const TextAnalyzeCard = () => {
 
   const handleAnalyze = async () => {
     if (!text) {
-      toast.error("Vui lòng nhập văn bản dài hơn một chút");
+      toast.error("Please enter a bit more text");
       return;
     }
 
@@ -32,7 +32,7 @@ const TextAnalyzeCard = () => {
       const response = await textApi.analyzeText(text);
       setResult(response.data);
     } catch (err) {
-      toast.error("Lỗi khi phân tích văn bản");
+      toast.error("Failed to analyze text");
       console.error(err);
     } finally {
       setLoading(false);
@@ -50,18 +50,18 @@ const TextAnalyzeCard = () => {
       <CardHeader>
         <div className="flex items-center gap-2">
           <FileText className="w-5 h-5 text-blue-500" />
-          <CardTitle>Phân tích văn bản</CardTitle>
+          <CardTitle>Text analysis</CardTitle>
         </div>
         <CardDescription>
-          Phân tích độ dài, từ vựng và tần suất xuất hiện.
+          Analyze length, vocabulary, and term frequency.
         </CardDescription>
       </CardHeader>
 
-      <CardContent className="space-y-4 flex-1">
+      <CardContent className="flex flex-1 flex-col gap-4">
         <div className="space-y-2">
-          <Label>Nhập văn bản</Label>
+          <Label>Input text</Label>
           <Textarea
-            placeholder="Dán đoạn văn bản bất kỳ vào đây..."
+            placeholder="Paste any text here..."
             value={text}
             onChange={(e) => setText(e.target.value)}
             disabled={loading}
@@ -69,29 +69,29 @@ const TextAnalyzeCard = () => {
           />
         </div>
 
-        <div className="rounded-md bg-muted/50 text-sm min-h-[8rem] p-3">
+        <div className="flex min-h-[10rem] flex-1 flex-col rounded-md bg-muted/50 p-3 text-sm">
           {result === null ? (
-            <div className="text-muted-foreground flex items-center gap-2 justify-center h-full">
+            <div className="flex h-full flex-1 items-center justify-center gap-2 text-center text-muted-foreground">
               <HelpCircle className="w-4 h-4" />
-              Chưa có kết quả
+              No results yet
             </div>
           ) : (
             <div className="space-y-2 animate-in fade-in zoom-in duration-300">
               <div>
-                📏 Ký tự: <b>{result.analysis.length}</b>
+                📏 Characters: <b>{result.analysis.length}</b>
               </div>
               <div>
-                🧩 Từ: <b>{result.analysis.totalWords}</b>
+                🧩 Words: <b>{result.analysis.totalWords}</b>
               </div>
               <div>
-                📘 Từ duy nhất: <b>{result.analysis.uniqueWords}</b>
+                📘 Unique words: <b>{result.analysis.uniqueWords}</b>
               </div>
               <div>
-                ⏱ Thời gian: <b>{result.timeTaken}</b>
+                ⏱ Processing time: <b>{result.timeTaken}</b>
               </div>
 
               <div className="pt-2 border-t">
-                <p className="font-semibold mb-1">Top từ phổ biến:</p>
+                <p className="font-semibold mb-1">Most frequent words:</p>
                 <ul className="text-xs space-y-1">
                   {result.analysis.topWords.map((w) => (
                     <li key={w.word}>
@@ -112,7 +112,7 @@ const TextAnalyzeCard = () => {
           onClick={handleAnalyze}
           disabled={loading}
         >
-          {loading ? "Đang phân tích..." : "Phân tích"}
+          {loading ? "Analyzing..." : "Analyze"}
         </Button>
       </CardFooter>
     </Card>
