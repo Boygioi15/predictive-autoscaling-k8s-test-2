@@ -10,8 +10,8 @@ spec:
   deploymentName: prime-service-deployment
   forecastDeployment: prime-service
   intervalMinutes: 1
-  safeRpsPerPod: 20
-  safetyFactor: 1.10
+  safeRpsPerPod: 16
+  safetyFactor: 1.20
   sparePod: 1
   minReplicas: 1
-  maxReplicas: 10
+  maxReplicas: 15

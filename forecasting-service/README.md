@@ -36,6 +36,10 @@ contract.
   "feature_metrics": ["rps"],
   "step_seconds": 60,
   "predictions": [120.0, 120.0, 120.0, 120.0, 120.0],
+  "observed": {
+    "app_p95_seconds": [0.12, 0.15, 0.14, 0.13, 0.11],
+    "ingress_p95_seconds": [0.16, 0.20, 0.18, 0.17, 0.15]
+  },
   "model_name": "last_value",
   "model_version": "v1",
   "generated_at": "2026-06-05T10:30:00Z"

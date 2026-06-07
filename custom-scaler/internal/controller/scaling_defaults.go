@@ -6,28 +6,37 @@ import (
 )
 
 const (
-	defaultSafeRPSPerPod = 20.0
-	defaultSafetyFactor  = 1.10
-	defaultSparePod      = int32(1)
-	defaultMinReplicas   = int32(1)
-	defaultMaxReplicas   = int32(10)
+	defaultSafeRPSPerPod           = 20.0
+	defaultSafetyFactor            = 1.10
+	defaultSparePod                = int32(1)
+	defaultMinReplicas             = int32(1)
+	defaultMaxReplicas             = int32(10)
+	defaultScaleDownPolicy         = "dangerous"
+	defaultAppP95ThresholdSeconds  = 0.50
+	defaultIngressP95ThresholdSecs = 0.50
 )
 
 type ScalingDefaults struct {
-	SafeRPSPerPod float64
-	SafetyFactor  float64
-	SparePod      int32
-	MinReplicas   int32
-	MaxReplicas   int32
+	SafeRPSPerPod          float64
+	SafetyFactor           float64
+	SparePod               int32
+	MinReplicas            int32
+	MaxReplicas            int32
+	ScaleDownPolicy        string
+	AppP95ThresholdSeconds float64
+	IngressP95ThresholdSec float64
 }
 
 func LoadScalingDefaultsFromEnv() ScalingDefaults {
 	return ScalingDefaults{
-		SafeRPSPerPod: getEnvFloat("SCALER_SAFE_RPS_PER_POD", defaultSafeRPSPerPod),
-		SafetyFactor:  getEnvFloat("SCALER_SAFETY_FACTOR", defaultSafetyFactor),
-		SparePod:      getEnvInt32("SCALER_SPARE_POD", defaultSparePod),
-		MinReplicas:   getEnvInt32("SCALER_MIN_REPLICAS", defaultMinReplicas),
-		MaxReplicas:   getEnvInt32("SCALER_MAX_REPLICAS", defaultMaxReplicas),
+		SafeRPSPerPod:          getEnvFloat("SCALER_SAFE_RPS_PER_POD", defaultSafeRPSPerPod),
+		SafetyFactor:           getEnvFloat("SCALER_SAFETY_FACTOR", defaultSafetyFactor),
+		SparePod:               getEnvInt32("SCALER_SPARE_POD", defaultSparePod),
+		MinReplicas:            getEnvInt32("SCALER_MIN_REPLICAS", defaultMinReplicas),
+		MaxReplicas:            getEnvInt32("SCALER_MAX_REPLICAS", defaultMaxReplicas),
+		ScaleDownPolicy:        getEnvString("SCALER_SCALE_DOWN_POLICY", defaultScaleDownPolicy),
+		AppP95ThresholdSeconds: getEnvFloat("SCALER_APP_P95_THRESHOLD_SECONDS", defaultAppP95ThresholdSeconds),
+		IngressP95ThresholdSec: getEnvFloat("SCALER_INGRESS_P95_THRESHOLD_SECONDS", defaultIngressP95ThresholdSecs),
 	}
 }
 
@@ -47,7 +56,27 @@ func (d ScalingDefaults) normalized() ScalingDefaults {
 	if d.MaxReplicas < d.MinReplicas {
 		d.MaxReplicas = d.MinReplicas
 	}
+	switch d.ScaleDownPolicy {
+	case "safe", "dangerous":
+	default:
+		d.ScaleDownPolicy = defaultScaleDownPolicy
+	}
+	if d.AppP95ThresholdSeconds <= 0 {
+		d.AppP95ThresholdSeconds = defaultAppP95ThresholdSeconds
+	}
+	if d.IngressP95ThresholdSec <= 0 {
+		d.IngressP95ThresholdSec = defaultIngressP95ThresholdSecs
+	}
 	return d
+}
+
+func getEnvString(key string, fallback string) string {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+
+	return raw
 }
 
 func getEnvFloat(key string, fallback float64) float64 {

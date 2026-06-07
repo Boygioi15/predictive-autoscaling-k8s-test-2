@@ -33,6 +33,7 @@ class ForecastResponse(BaseModel):
     feature_metrics: list[str]
     step_seconds: int = Field(ge=1)
     predictions: list[float]
+    observed: dict[str, list[float | None]] = Field(default_factory=dict)
     model_name: str
     model_version: str
     generated_at: datetime
@@ -41,6 +42,7 @@ class ForecastResponse(BaseModel):
 class ForecastOption(BaseModel):
     target_metric: str
     feature_metrics: list[str]
+    guardrail_queries: dict[str, str] | None = None
     lookback_steps: int = Field(ge=1)
     horizon_steps: int = Field(ge=1)
     step_seconds: int = Field(ge=1)

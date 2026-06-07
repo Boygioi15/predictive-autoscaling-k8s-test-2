@@ -67,15 +67,21 @@ spec:
         imagePullPolicy: Always
         env:
         - name: SCALER_SAFE_RPS_PER_POD
-          value: "20"
+          value: "16"
         - name: SCALER_SAFETY_FACTOR
-          value: "1.10"
+          value: "1.20"
         - name: SCALER_SPARE_POD
           value: "1"
         - name: SCALER_MIN_REPLICAS
           value: "1"
         - name: SCALER_MAX_REPLICAS
           value: "10"
+        - name: SCALER_SCALE_DOWN_POLICY
+          value: "safe"
+        - name: SCALER_APP_P95_THRESHOLD_SECONDS
+          value: "0.50"
+        - name: SCALER_INGRESS_P95_THRESHOLD_SECONDS
+          value: "0.50"
         name: manager
         ports: []
         securityContext:

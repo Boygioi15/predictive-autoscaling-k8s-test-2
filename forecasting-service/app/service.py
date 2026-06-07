@@ -51,6 +51,12 @@ class ForecastingService:
             generated_at=generated_at,
         )
 
+        observed = await self._fetch_guardrail_history(
+            deployment=deployment,
+            option=option,
+            generated_at=generated_at,
+        )
+
         predictions = await self._predict(
             deployment=deployment,
             option=option,
@@ -65,6 +71,7 @@ class ForecastingService:
             feature_metrics=option.feature_metrics,
             step_seconds=option.step_seconds,
             predictions=predictions,
+            observed=observed,
             model_name=option.model_name,
             model_version=option.model_version,
             generated_at=generated_at,
@@ -154,6 +161,41 @@ class ForecastingService:
             )
 
         return history
+
+    async def _fetch_guardrail_history(
+        self,
+        *,
+        deployment: str,
+        option: ForecastOption,
+        generated_at: datetime,
+    ) -> dict[str, list[float | None]]:
+        if not option.guardrail_queries:
+            return {}
+
+        start = generated_at - timedelta(
+            seconds=option.step_seconds * (option.horizon_steps - 1)
+        )
+        observed: dict[str, list[float | None]] = {}
+
+        for metric_name, raw_query in option.guardrail_queries.items():
+            query = self._render_query(raw_query, deployment)
+            values = await self.prometheus.query_range(
+                query,
+                start=start,
+                end=generated_at,
+                step_seconds=option.step_seconds,
+                expected_points=option.horizon_steps,
+                nullable=True,
+            )
+            observed[metric_name] = values
+            logger.info(
+                "Fetched Prometheus guardrail history deployment=%s metric=%s points=%s",
+                deployment,
+                metric_name,
+                len(values),
+            )
+
+        return observed
 
     def _render_query(self, query: str, deployment: str) -> str:
         return query.replace("{{deployment}}", deployment)

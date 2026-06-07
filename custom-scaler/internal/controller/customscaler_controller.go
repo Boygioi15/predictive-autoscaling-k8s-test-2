@@ -155,6 +155,25 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		currentReplicas = *deployment.Spec.Replicas
 	}
 
+	scaleDownAllowed := true
+	scaleDownReason := "not-applicable"
+	if desiredReplicas < currentReplicas {
+		scaleDownAllowed, scaleDownReason = allowScaleDown(forecast.Observed, policy)
+		if !scaleDownAllowed {
+			log.Info(
+				"Skipping scale down because guardrails are not healthy",
+				"targetDeployment", customScaler.Spec.DeploymentName,
+				"forecastDeployment", forecastDeploymentName(&customScaler),
+				"currentReplicas", currentReplicas,
+				"desiredReplicas", desiredReplicas,
+				"scaleDownPolicy", policy.ScaleDownPolicy,
+				"scaleDownReason", scaleDownReason,
+				"observed", forecast.Observed,
+			)
+			desiredReplicas = currentReplicas
+		}
+	}
+
 	if currentReplicas != desiredReplicas {
 		log.Info("Scaling deployment", "Old", currentReplicas, "New", desiredReplicas)
 		deployment.Spec.Replicas = &desiredReplicas
@@ -191,18 +210,22 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 type forecastResponse struct {
-	Deployment   string    `json:"deployment"`
-	TargetMetric string    `json:"target_metric"`
-	StepSeconds  int       `json:"step_seconds"`
-	Predictions  []float64 `json:"predictions"`
+	Deployment   string                `json:"deployment"`
+	TargetMetric string                `json:"target_metric"`
+	StepSeconds  int                   `json:"step_seconds"`
+	Predictions  []float64             `json:"predictions"`
+	Observed     map[string][]*float64 `json:"observed"`
 }
 
 type scalingPolicy struct {
-	SafeRPSPerPod float64
-	SafetyFactor  float64
-	SparePod      int32
-	MinReplicas   int32
-	MaxReplicas   int32
+	SafeRPSPerPod          float64
+	SafetyFactor           float64
+	SparePod               int32
+	MinReplicas            int32
+	MaxReplicas            int32
+	ScaleDownPolicy        string
+	AppP95ThresholdSeconds float64
+	IngressP95ThresholdSec float64
 }
 
 func parseForecastResponse(body []byte) (forecastResponse, error) {
@@ -250,11 +273,14 @@ func (r *CustomScalerReconciler) scalingPolicyFor(customScaler *autoscalingv1.Cu
 	defaults := r.PolicyDefaults.normalized()
 
 	policy := scalingPolicy{
-		SafeRPSPerPod: defaults.SafeRPSPerPod,
-		SafetyFactor:  defaults.SafetyFactor,
-		SparePod:      defaults.SparePod,
-		MinReplicas:   defaults.MinReplicas,
-		MaxReplicas:   defaults.MaxReplicas,
+		SafeRPSPerPod:          defaults.SafeRPSPerPod,
+		SafetyFactor:           defaults.SafetyFactor,
+		SparePod:               defaults.SparePod,
+		MinReplicas:            defaults.MinReplicas,
+		MaxReplicas:            defaults.MaxReplicas,
+		ScaleDownPolicy:        defaults.ScaleDownPolicy,
+		AppP95ThresholdSeconds: defaults.AppP95ThresholdSeconds,
+		IngressP95ThresholdSec: defaults.IngressP95ThresholdSec,
 	}
 
 	if customScaler.Spec.SafeRPSPerPod != nil && *customScaler.Spec.SafeRPSPerPod > 0 {
@@ -320,6 +346,46 @@ func normalizeForecastPredictions(forecast forecastResponse) ([]float64, string)
 	default:
 		return normalized, targetMetric
 	}
+}
+
+func allowScaleDown(observed map[string][]*float64, policy scalingPolicy) (bool, string) {
+	if policy.ScaleDownPolicy != "safe" {
+		return true, "policy-dangerous"
+	}
+
+	appSeries := observed["app_p95_seconds"]
+	ingressSeries := observed["ingress_p95_seconds"]
+	if len(appSeries) == 0 || len(ingressSeries) == 0 {
+		return false, "missing-guardrail-history"
+	}
+
+	validGuardrailPoint := false
+
+	for _, value := range appSeries {
+		if value == nil {
+			continue
+		}
+		validGuardrailPoint = true
+		if *value > policy.AppP95ThresholdSeconds {
+			return false, fmt.Sprintf("app_p95_above_threshold: %.3f > %.3f", *value, policy.AppP95ThresholdSeconds)
+		}
+	}
+
+	for _, value := range ingressSeries {
+		if value == nil {
+			continue
+		}
+		validGuardrailPoint = true
+		if *value > policy.IngressP95ThresholdSec {
+			return false, fmt.Sprintf("ingress_p95_above_threshold: %.3f > %.3f", *value, policy.IngressP95ThresholdSec)
+		}
+	}
+
+	if !validGuardrailPoint {
+		return true, "no-valid-guardrail-points"
+	}
+
+	return true, "all-guardrails-healthy"
 }
 
 func maxFloat64(values []float64) float64 {

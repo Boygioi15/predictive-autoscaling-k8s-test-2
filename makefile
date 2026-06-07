@@ -125,3 +125,5 @@ stop-environment:
 	bash ./linux-script/release-cpu-frequency.sh
 
 # scp k3s-master:~/predictive-autoscaling-k8s-test/shares/ingress_request_report.csv ~/predictive-autoscaling-k8s-test/shares/ingress_request_report.csv
+# kubectl apply -f custom-scaler/config/samples/autoscaling_v1_customscaler.yaml
+# kubectl scale deployment/custom-scaler-controller-manager -n custom-scaler-system --replicas=0
