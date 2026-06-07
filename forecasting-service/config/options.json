@@ -1,0 +1,31 @@
+{
+  "prime-last-value-v1": {
+    "target_metric": "requests_per_minute",
+    "feature_metrics": [
+      "rps"
+    ],
+    "lookback_steps": 60,
+    "horizon_steps": 5,
+    "step_seconds": 60,
+    "model_full_name": "last_value:v1",
+    "prometheus_queries": {
+      "rps": "sum(increase(http_requests_total{job=\"{{deployment}}\"}[1m]))"
+    },
+    "local": true
+  },
+  "prime-linear-regression-v1": {
+    "target_metric": "requests_per_minute",
+    "feature_metrics": [
+      "rps"
+    ],
+    "lookback_steps": 60,
+    "horizon_steps": 5,
+    "step_seconds": 60,
+    "model_full_name": "linear_regression:v1",
+    "prometheus_queries": {
+      "rps": "sum(increase(http_requests_total{job=\"{{deployment}}\"}[1m]))"
+    },
+    "local": false,
+    "endpoint": "http://linear-regression-model.default.svc.cluster.local/predict"
+  }
+}

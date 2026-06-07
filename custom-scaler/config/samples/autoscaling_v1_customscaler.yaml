@@ -1,0 +1,17 @@
+apiVersion: autoscaling.my.domain/v1
+kind: CustomScaler
+metadata:
+  labels:
+    app.kubernetes.io/name: custom-scaler
+    app.kubernetes.io/managed-by: kustomize
+  name: customscaler-sample
+spec:
+  url: "http://forecasting-service.default.svc.cluster.local:8080/forecast"
+  deploymentName: prime-service-deployment
+  forecastDeployment: prime-service
+  intervalMinutes: 1
+  safeRpsPerPod: 20
+  safetyFactor: 1.10
+  sparePod: 1
+  minReplicas: 1
+  maxReplicas: 10

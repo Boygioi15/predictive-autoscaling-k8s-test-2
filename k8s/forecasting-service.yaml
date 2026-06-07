@@ -16,8 +16,7 @@ spec:
     spec:
       containers:
         - name: forecasting-service-container
-          image: forecasting-service:v1
-          imagePullPolicy: Never
+          image: docker.io/boygioi/forecasting-service:latest
           ports:
             - containerPort: 8080
           env:

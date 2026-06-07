@@ -1,0 +1,6 @@
+{
+  "default_option_id": "prime-last-value-v1",
+  "deployments": {
+    "prime-service": "prime-last-value-v1"
+  }
+}

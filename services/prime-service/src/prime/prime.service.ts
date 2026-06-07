@@ -14,7 +14,7 @@ export class PrimeService implements OnModuleInit, OnModuleDestroy {
   private readonly intervalSeconds = 1.5;
   private intervalRef?: NodeJS.Timeout;
   private readonly workerPath = join(__dirname, 'prime.worker.js');
-  private readonly poolSize = 4;
+  private readonly poolSize = 3;
   private readonly workers: WorkerSlot[] = [];
   private readonly pendingTasks: QueuedTask<unknown>[] = [];
   private nextTaskId = 1;

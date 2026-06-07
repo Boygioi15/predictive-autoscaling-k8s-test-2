@@ -6,20 +6,23 @@ build-service:
 	docker build -t docker.io/boygioi/text-service:latest ./services/text-service
 	docker build -t docker.io/boygioi/io-service:latest ./services/io-service
 	docker build -t docker.io/boygioi/frontend-service:latest ./services/frontend
-push-service: 
-	docker push docker.io/boygioi/prime-service:latest
-	docker push docker.io/boygioi/text-service:latest
-	docker push docker.io/boygioi/io-service:latest
-	docker push docker.io/boygioi/frontend-service:latest
 build-locust: 
 	docker compose build locust
 build-custom-load-test:
 	docker compose build custom-load-test
 build-forecasting-service: 
-	minikube -p=thesis image build -t forecasting-service:v1 ./forecasting-service
-start:
-	minikube -p=thesis start --driver=kvm2 --container-runtime=containerd --nodes=1 --cpus=6 --memory=8192
+	docker build -t docker.io/boygioi/forecasting-service:latest ./forecasting-service
+build-custom-scaler: 
+	make -C ./custom-scaler/ docker-build docker-push IMG=docker.io/boygioi/custom-scaler:latest
+push-service: 
+	docker push docker.io/boygioi/prime-service:latest
+	docker push docker.io/boygioi/text-service:latest
+	docker push docker.io/boygioi/io-service:latest
+	docker push docker.io/boygioi/frontend-service:latest
+push-forecasting-service: 
+	docker push docker.io/boygioi/forecasting-service:latest
 
+start:
 	- kubectl apply -f k8s/prime-deployment.yaml
 	- kubectl apply -f k8s/prime-service.yaml
 	- kubectl apply -f k8s/text-deployment.yaml
@@ -57,6 +60,12 @@ restart-forecasting-service:
 	- kubectl apply -f k8s/forecasting-service.yaml
 	- kubectl rollout restart deployment/forecasting-service-deployment
 	- kubectl logs deploy/forecasting-service-deployment
+deploy-custom-scaler: 
+	make -C ./custom-scaler/ install
+	make -C ./custom-scaler/ deploy IMG=docker.io/boygioi/custom-scaler:latest
+	kubectl apply -f ~/predictive-autoscaling-k8s-test/custom-scaler/config/samples/autoscaling_v1_customscaler.yaml
+	kubectl rollout restart deployment/custom-scaler-controller-manager -n custom-scaler-system
+
 restart-service: 
 	- kubectl rollout restart deployment prime-service-deployment
 	- kubectl rollout restart deployment text-service-deployment
@@ -114,16 +123,5 @@ start-environment:
 stop-environment: 
 	minikube -p=thesis stop
 	bash ./linux-script/release-cpu-frequency.sh
-
-
-watch-ingress-request-counts:
-	sh helper/watch_ingress_request_counts.sh ingress-backend shares/ingress_request_report.csv
-
-	restart-locust: 
-	docker compose restart locust
-deploy-locust: 
-	docker compose up -d locust
-open-locust: 
-	@echo "Locust UI: http://localhost:8089"
 
 # scp k3s-master:~/predictive-autoscaling-k8s-test/shares/ingress_request_report.csv ~/predictive-autoscaling-k8s-test/shares/ingress_request_report.csv

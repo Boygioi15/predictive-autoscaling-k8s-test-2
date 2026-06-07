@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .config import settings
-from .models import PredictionRequest, PredictionResponse
+from .models import ForecastRequest, ForecastResponse
 from .service import ForecastingService
 
 
@@ -21,10 +21,9 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/predict-workload", response_model=PredictionResponse)
-async def predict_workload(request: PredictionRequest) -> PredictionResponse:
+@app.post("/forecast", response_model=ForecastResponse)
+async def forecast(request: ForecastRequest) -> ForecastResponse:
     return await service.predict_workload(request)
-
 
 @app.get("/")
 async def root() -> dict[str, str]:
