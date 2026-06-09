@@ -24,6 +24,26 @@ require_env() {
   fi
 }
 
+extract_ssh_host() {
+  local ssh_target="$1"
+  local host="${ssh_target##*@}"
+  printf '%s\n' "${host}"
+}
+
+remove_stale_known_host() {
+  local ssh_target="$1"
+  local known_hosts_file="$2"
+  local ssh_host
+
+  ssh_host="$(extract_ssh_host "${ssh_target}")"
+
+  mkdir -p "$(dirname "${known_hosts_file}")"
+  touch "${known_hosts_file}"
+
+  ssh-keygen -R "${ssh_host}" -f "${known_hosts_file}" >/dev/null 2>&1 || true
+  ssh-keygen -R "[${ssh_host}]:22" -f "${known_hosts_file}" >/dev/null 2>&1 || true
+}
+
 main() {
   if [[ $# -lt 3 || $# -gt 4 ]]; then
     usage
@@ -39,7 +59,17 @@ main() {
   local node_name="${4:-}"
   local local_script="linux-script/bootstrap-k3s-worker.sh"
   local remote_script="/tmp/bootstrap-k3s-worker.sh"
+  local known_hosts_file="${SSH_KNOWN_HOSTS_FILE:-$HOME/.ssh/known_hosts}"
+  local refresh_known_hosts="${REFRESH_KNOWN_HOSTS:-true}"
   local ssh_opts="${SSH_OPTS:-}"
+
+  if [[ "${refresh_known_hosts}" == "true" ]]; then
+    remove_stale_known_host "${ssh_target}" "${known_hosts_file}"
+  fi
+
+  if [[ -z "${ssh_opts}" ]]; then
+    ssh_opts="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${known_hosts_file}"
+  fi
 
   scp ${ssh_opts} "${local_script}" "${ssh_target}:${remote_script}"
 

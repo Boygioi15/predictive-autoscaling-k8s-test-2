@@ -77,6 +77,27 @@ spec:
               url:
                 description: The forecasting service endpoint to call.
                 type: string
+              workerPrototype:
+                description: Optional prototype settings for durable worker-count
+                  planning.
+                properties:
+                  maxBatchSize:
+                    description: Maximum number of worker operations to enqueue in
+                      a single reconcile.
+                    format: int32
+                    type: integer
+                  nodeLabelKey:
+                    description: Optional node label key used to identify worker nodes.
+                    type: string
+                  nodeLabelValue:
+                    description: Optional node label value used together with NodeLabelKey.
+                    type: string
+                  targetWorkerCount:
+                    description: Desired number of worker nodes the prototype should
+                      converge toward.
+                    format: int32
+                    type: integer
+                type: object
             required:
             - deploymentName
             - url
@@ -99,6 +120,80 @@ spec:
               lastForecastPeak:
                 description: The latest forecast peak seen from the forecasting service.
                 type: number
+              workerPrototype:
+                description: Durable worker-planning state for the prototype node
+                  scaler.
+                properties:
+                  activeOperation:
+                    description: Optional single in-flight worker operation managed
+                      by the prototype executor.
+                    properties:
+                      commandFinishedAt:
+                        description: When the executor observed the command job complete.
+                        format: date-time
+                        type: string
+                      jobName:
+                        description: Name of the Kubernetes Job executing the operation.
+                        type: string
+                      jobNamespace:
+                        description: Namespace of the Kubernetes Job executing the
+                          operation.
+                        type: string
+                      message:
+                        description: Last executor message for humans.
+                        type: string
+                      operationType:
+                        description: 'Type of worker operation: create or delete.'
+                        type: string
+                      phase:
+                        description: 'Current executor phase: Running or WaitingForObservation.'
+                        type: string
+                      requestedCount:
+                        description: Number of workers requested by this operation.
+                          The prototype uses 1.
+                        format: int32
+                        type: integer
+                      startedAt:
+                        description: When the executor started the operation.
+                        format: date-time
+                        type: string
+                    type: object
+                  effectiveWorkerCount:
+                    description: Effective worker count used by ensure_worker = ready
+                      + pendingCreate - pendingDelete.
+                    format: int32
+                    type: integer
+                  lastAction:
+                    description: 'Last prototype action taken: enqueue-create, enqueue-delete,
+                      or stable.'
+                    type: string
+                  lastEnsureTime:
+                    description: Last time the prototype worker planner ran.
+                    format: date-time
+                    type: string
+                  lastReason:
+                    description: Human-readable explanation for the last prototype
+                      action.
+                    type: string
+                  observedReadyWorkerCount:
+                    description: Latest observed count of Ready worker nodes.
+                    format: int32
+                    type: integer
+                  pendingCreateCount:
+                    description: Number of worker creations that have been planned
+                      but not yet observed as Ready.
+                    format: int32
+                    type: integer
+                  pendingDeleteCount:
+                    description: Number of worker deletions that have been planned
+                      but not yet observed as gone.
+                    format: int32
+                    type: integer
+                  targetWorkerCount:
+                    description: Latest desired worker count requested by the prototype.
+                    format: int32
+                    type: integer
+                type: object
             required:
             - currentReplicas
             - lastDesiredReplicas

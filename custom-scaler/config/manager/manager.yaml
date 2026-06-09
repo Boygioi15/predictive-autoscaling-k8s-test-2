@@ -82,6 +82,28 @@ spec:
           value: "0.50"
         - name: SCALER_INGRESS_P95_THRESHOLD_SECONDS
           value: "0.50"
+        - name: SCALER_WORKER_EXECUTOR_NAMESPACE
+          value: "custom-scaler-system"
+        - name: SCALER_WORKER_EXECUTOR_SERVICE_ACCOUNT
+          value: "custom-scaler-controller-manager"
+        - name: SCALER_WORKER_EXECUTOR_IMAGE
+          value: "docker.io/boygioi/vm-job:latest"
+        - name: SCALER_WORKER_CREATE_COMMAND
+          value: "/workspace/linux-script/executor-create-worker.sh"
+        - name: SCALER_WORKER_DELETE_COMMAND
+          value: ""
+        - name: SCALER_WORKER_LOAD_BALANCER_ID
+          value: ""
+        - name: SCALER_WORKER_NODE_NAME_PREFIX
+          value: "k3s-worker"
+        - name: SCALER_WORKER_EXECUTOR_CONFIG_MAP_NAME
+          value: "custom-scaler-vm-job-config"
+        - name: SCALER_WORKER_EXECUTOR_SECRET_NAME
+          value: "custom-scaler-vm-job-secret"
+        - name: SCALER_WORKER_EXECUTOR_SECRET_MOUNT_PATH
+          value: "/var/run/vm-job-secret"
+        - name: SCALER_WORKER_EXECUTOR_TTL_SECONDS
+          value: "3600"
         name: manager
         ports: []
         securityContext:

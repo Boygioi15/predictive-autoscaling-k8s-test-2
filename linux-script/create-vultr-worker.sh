@@ -12,6 +12,7 @@ Usage:
   VULTR_FIREWALL_GROUP_ID=<firewall-id> \
   VULTR_VPC_ID=<vpc-id> \
   VULTR_SSH_KEY_IDS=<ssh-key-id>[,<ssh-key-id>...] \
+  VULTR_ROOT_PUBLIC_KEY_FILE=~/.ssh/id_ed25519.pub \
   ./linux-script/create-vultr-worker.sh <node-name>
 
 Example:
@@ -22,6 +23,7 @@ Example:
   VULTR_FIREWALL_GROUP_ID=abcd1234 \
   VULTR_VPC_ID=dcba4321 \
   VULTR_SSH_KEY_IDS=key-1 \
+  VULTR_ROOT_PUBLIC_KEY_FILE=~/.ssh/id_ed25519.pub \
   K3S_URL=https://10.40.96.3:6443 \
   K3S_TOKEN=K10... \
   ./linux-script/create-vultr-worker.sh worker-5
@@ -97,8 +99,10 @@ api_call() {
 
 build_payload() {
   python3 - "$NODE_NAME" <<'PY'
+import base64
 import json
 import os
+from pathlib import Path
 import sys
 
 node_name = sys.argv[1]
@@ -108,6 +112,33 @@ def csv(name):
     if not raw:
         return []
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+def read_root_public_key():
+    inline_key = os.environ.get("VULTR_ROOT_PUBLIC_KEY", "").strip()
+    if inline_key:
+        return inline_key
+
+    key_file = os.environ.get("VULTR_ROOT_PUBLIC_KEY_FILE", "").strip()
+    if not key_file:
+        return ""
+
+    expanded = Path(key_file).expanduser()
+    if not expanded.is_file():
+        raise SystemExit(f"Root public key file not found: {expanded}")
+
+    return expanded.read_text(encoding="utf-8").strip()
+
+def build_root_cloud_init(public_key: str):
+    return "\n".join([
+        "#cloud-config",
+        "disable_root: false",
+        "ssh_pwauth: false",
+        "users:",
+        "  - name: root",
+        "    lock_passwd: true",
+        "    ssh_authorized_keys:",
+        f"      - {public_key}",
+    ])
 
 payload = {
     "region": os.environ["VULTR_REGION"],
@@ -131,8 +162,11 @@ if tags:
     payload["tags"] = tags
 
 user_data = os.environ.get("VULTR_USER_DATA", "")
+root_public_key = read_root_public_key()
+if not user_data and root_public_key:
+    user_data = build_root_cloud_init(root_public_key)
 if user_data:
-    payload["user_data"] = user_data
+    payload["user_data"] = base64.b64encode(user_data.encode("utf-8")).decode("ascii")
 
 script_id = os.environ.get("VULTR_SCRIPT_ID", "").strip()
 if script_id:
@@ -178,13 +212,15 @@ print(instance.get("internal_ip", ""))
 print_next_steps() {
   local public_ip="$1"
   local private_ip="$2"
+  local server_status="$3"
   local bootstrap_ssh_user
   bootstrap_ssh_user="${VULTR_BOOTSTRAP_SSH_USER:-root}"
 
   echo
-  echo "Instance is active."
+  echo "Instance is ready."
   echo "  node-name: ${NODE_NAME}"
   echo "  instance-id: ${INSTANCE_ID}"
+  echo "  server-status: ${server_status}"
   echo "  public-ip: ${public_ip}"
   echo "  private-ip: ${private_ip}"
 
@@ -195,6 +231,39 @@ print_next_steps() {
   else
     echo "  K3S_URL=https://10.40.96.3:6443 K3S_TOKEN='<token>' ./linux-script/add-k3s-worker-over-ssh.sh ${bootstrap_ssh_user}@${private_ip} ${private_ip} ${FLANNEL_IFACE_DEFAULT} ${NODE_NAME}"
   fi
+
+  write_result_file "${public_ip}" "${private_ip}" "${server_status}"
+}
+
+write_result_file() {
+  local public_ip="$1"
+  local private_ip="$2"
+  local server_status="$3"
+  local result_file="${CREATE_RESULT_FILE:-}"
+
+  if [[ -z "${result_file}" ]]; then
+    return
+  fi
+
+  python3 - "$result_file" "$NODE_NAME" "$INSTANCE_ID" "$public_ip" "$private_ip" "$server_status" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_file, node_name, instance_id, public_ip, private_ip, server_status = sys.argv[1:]
+
+payload = {
+    "node_name": node_name,
+    "instance_id": instance_id,
+    "public_ip": public_ip,
+    "private_ip": private_ip,
+    "server_status": server_status,
+}
+
+path = Path(result_file)
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps(payload), encoding="utf-8")
+PY
 }
 
 attach_vpc_to_instance() {
@@ -245,7 +314,7 @@ main() {
   fi
 
   INSTANCE_ID="$(printf '%s' "${create_response}" | parse_create_response)"
-  echo "Created instance ${INSTANCE_ID}, waiting for active state..."
+  echo "Created instance ${INSTANCE_ID}, waiting for ready state..."
 
   local deadline
   deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
@@ -257,6 +326,7 @@ main() {
   local instance_state_response=""
   local vpc_attached="false"
   local require_private_ip="false"
+  local instance_ready="false"
   if [[ -n "${VULTR_VPC_ID:-}" ]]; then
     require_private_ip="true"
   fi
@@ -267,6 +337,7 @@ main() {
     server_status="${state[1]}"
     public_ip="${state[2]}"
     private_ip="${state[3]}"
+    instance_ready="false"
 
     if [[ "${status}" == "active" && -n "${public_ip}" && "${vpc_attached}" == "false" && -n "${VULTR_VPC_ID:-}" ]]; then
       echo "Attaching VPC ${VULTR_VPC_ID} to instance ${INSTANCE_ID}..."
@@ -276,8 +347,12 @@ main() {
       continue
     fi
 
-    if [[ "${status}" == "active" && -n "${public_ip}" && ( "${require_private_ip}" == "false" || -n "${private_ip}" ) ]]; then
-      print_next_steps "${public_ip}" "${private_ip}"
+    if [[ "${status}" == "active" && "${server_status}" == "ok" && -n "${public_ip}" && ( "${require_private_ip}" == "false" || -n "${private_ip}" ) ]]; then
+      instance_ready="true"
+    fi
+
+    if [[ "${instance_ready}" == "true" ]]; then
+      print_next_steps "${public_ip}" "${private_ip}" "${server_status}"
       return
     fi
 
@@ -285,7 +360,7 @@ main() {
     sleep "${WAIT_INTERVAL_SECONDS}"
   done
 
-  echo "Timed out waiting for instance ${INSTANCE_ID} to become active." >&2
+  echo "Timed out waiting for instance ${INSTANCE_ID} to become ready (status=active, server_status=ok)." >&2
   exit 1
 }
 

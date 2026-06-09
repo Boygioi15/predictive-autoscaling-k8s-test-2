@@ -1,0 +1,3 @@
+resources:
+- vm-job-config.yaml
+- vm-job-secret.yaml

@@ -44,12 +44,15 @@ type CustomScalerReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	PolicyDefaults ScalingDefaults
+	WorkerExecutor WorkerExecutorConfig
 }
 
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -182,11 +185,38 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
+	workerPlan, err := r.reconcileWorkerPrototype(ctx, &customScaler, time.Now())
+	if err != nil {
+		log.Error(err, "Failed to reconcile worker prototype state")
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+	if err := r.reconcileWorkerExecutor(ctx, &customScaler, workerPlan, time.Now()); err != nil {
+		log.Error(err, "Failed to reconcile worker prototype executor")
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+	workerStatusChanged := workerPrototypeStatusChanged(customScaler.Status.WorkerPrototype, workerPlan)
+	if workerPlan != nil {
+		customScaler.Status.WorkerPrototype = &workerPlan.Status
+		log.Info(
+			"Worker prototype ensure_worker evaluated",
+			"targetWorkers", workerPlan.Status.TargetWorkerCount,
+			"observedReadyWorkers", workerPlan.Status.ObservedReadyWorkerCount,
+			"pendingCreateWorkers", workerPlan.Status.PendingCreateCount,
+			"pendingDeleteWorkers", workerPlan.Status.PendingDeleteCount,
+			"effectiveWorkers", workerPlan.Status.EffectiveWorkerCount,
+			"workersToCreate", workerPlan.WorkersToCreate,
+			"workersToDelete", workerPlan.WorkersToDelete,
+			"lastAction", workerPlan.Status.LastAction,
+			"lastReason", workerPlan.Status.LastReason,
+		)
+	}
+
 	// Update status only when it actually changed, otherwise we create extra reconcile events.
 	if customScaler.Status.LastForecastPeak != peakRPS ||
 		customScaler.Status.LastEffectiveRPS != effectiveRPS ||
 		customScaler.Status.LastDesiredReplicas != desiredReplicas ||
-		customScaler.Status.CurrentReplicas != desiredReplicas {
+		customScaler.Status.CurrentReplicas != desiredReplicas ||
+		workerStatusChanged {
 		customScaler.Status.LastForecastPeak = peakRPS
 		customScaler.Status.LastEffectiveRPS = effectiveRPS
 		customScaler.Status.LastDesiredReplicas = desiredReplicas
@@ -400,6 +430,44 @@ func maxFloat64(values []float64) float64 {
 		}
 	}
 	return maxValue
+}
+
+func workerPrototypeStatusChanged(
+	current *autoscalingv1.WorkerPrototypeStatus,
+	plan *workerPrototypePlan,
+) bool {
+	if plan == nil {
+		return false
+	}
+
+	if current == nil {
+		return true
+	}
+
+	return current.TargetWorkerCount != plan.Status.TargetWorkerCount ||
+		current.ObservedReadyWorkerCount != plan.Status.ObservedReadyWorkerCount ||
+		current.PendingCreateCount != plan.Status.PendingCreateCount ||
+		current.PendingDeleteCount != plan.Status.PendingDeleteCount ||
+		current.EffectiveWorkerCount != plan.Status.EffectiveWorkerCount ||
+		current.LastAction != plan.Status.LastAction ||
+		current.LastReason != plan.Status.LastReason ||
+		workerOperationChanged(current.ActiveOperation, plan.Status.ActiveOperation)
+}
+
+func workerOperationChanged(current, next *autoscalingv1.WorkerOperationStatus) bool {
+	if current == nil && next == nil {
+		return false
+	}
+	if current == nil || next == nil {
+		return true
+	}
+
+	return current.OperationType != next.OperationType ||
+		current.Phase != next.Phase ||
+		current.JobNamespace != next.JobNamespace ||
+		current.JobName != next.JobName ||
+		current.RequestedCount != next.RequestedCount ||
+		current.Message != next.Message
 }
 
 // SetupWithManager sets up the controller with the Manager.

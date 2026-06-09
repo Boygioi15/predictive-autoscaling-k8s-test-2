@@ -44,6 +44,19 @@ type CustomScalerSpec struct {
 	MinReplicas *int32 `json:"minReplicas,omitempty"`
 	// Optional per-scaler override for the maximum replica clamp.
 	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
+	// Optional prototype settings for durable worker-count planning.
+	WorkerPrototype *WorkerPrototypeSpec `json:"workerPrototype,omitempty"`
+}
+
+type WorkerPrototypeSpec struct {
+	// Desired number of worker nodes the prototype should converge toward.
+	TargetWorkerCount *int32 `json:"targetWorkerCount,omitempty"`
+	// Maximum number of worker operations to enqueue in a single reconcile.
+	MaxBatchSize *int32 `json:"maxBatchSize,omitempty"`
+	// Optional node label key used to identify worker nodes.
+	NodeLabelKey string `json:"nodeLabelKey,omitempty"`
+	// Optional node label value used together with NodeLabelKey.
+	NodeLabelValue string `json:"nodeLabelValue,omitempty"`
 }
 
 type CustomScalerStatus struct {
@@ -55,6 +68,48 @@ type CustomScalerStatus struct {
 	LastDesiredReplicas int32 `json:"lastDesiredReplicas"`
 	// Current replica count
 	CurrentReplicas int32 `json:"currentReplicas"`
+	// Durable worker-planning state for the prototype node scaler.
+	WorkerPrototype *WorkerPrototypeStatus `json:"workerPrototype,omitempty"`
+}
+
+type WorkerPrototypeStatus struct {
+	// Latest desired worker count requested by the prototype.
+	TargetWorkerCount int32 `json:"targetWorkerCount,omitempty"`
+	// Latest observed count of Ready worker nodes.
+	ObservedReadyWorkerCount int32 `json:"observedReadyWorkerCount,omitempty"`
+	// Number of worker creations that have been planned but not yet observed as Ready.
+	PendingCreateCount int32 `json:"pendingCreateCount,omitempty"`
+	// Number of worker deletions that have been planned but not yet observed as gone.
+	PendingDeleteCount int32 `json:"pendingDeleteCount,omitempty"`
+	// Effective worker count used by ensure_worker = ready + pendingCreate - pendingDelete.
+	EffectiveWorkerCount int32 `json:"effectiveWorkerCount,omitempty"`
+	// Last prototype action taken: enqueue-create, enqueue-delete, or stable.
+	LastAction string `json:"lastAction,omitempty"`
+	// Human-readable explanation for the last prototype action.
+	LastReason string `json:"lastReason,omitempty"`
+	// Last time the prototype worker planner ran.
+	LastEnsureTime *metav1.Time `json:"lastEnsureTime,omitempty"`
+	// Optional single in-flight worker operation managed by the prototype executor.
+	ActiveOperation *WorkerOperationStatus `json:"activeOperation,omitempty"`
+}
+
+type WorkerOperationStatus struct {
+	// Type of worker operation: create or delete.
+	OperationType string `json:"operationType,omitempty"`
+	// Current executor phase: Running or WaitingForObservation.
+	Phase string `json:"phase,omitempty"`
+	// Namespace of the Kubernetes Job executing the operation.
+	JobNamespace string `json:"jobNamespace,omitempty"`
+	// Name of the Kubernetes Job executing the operation.
+	JobName string `json:"jobName,omitempty"`
+	// Number of workers requested by this operation. The prototype uses 1.
+	RequestedCount int32 `json:"requestedCount,omitempty"`
+	// Last executor message for humans.
+	Message string `json:"message,omitempty"`
+	// When the executor started the operation.
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+	// When the executor observed the command job complete.
+	CommandFinishedAt *metav1.Time `json:"commandFinishedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

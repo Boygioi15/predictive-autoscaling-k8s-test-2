@@ -14,11 +14,15 @@ build-forecasting-service:
 	docker build -t docker.io/boygioi/forecasting-service:latest ./forecasting-service
 build-custom-scaler: 
 	make -C ./custom-scaler/ docker-build docker-push IMG=docker.io/boygioi/custom-scaler:latest
+build-vm-job:
+	docker build -t docker.io/boygioi/vm-job:latest -f ./linux-script/vm-job.Dockerfile .
 push-service: 
 	docker push docker.io/boygioi/prime-service:latest
 	docker push docker.io/boygioi/text-service:latest
 	docker push docker.io/boygioi/io-service:latest
 	docker push docker.io/boygioi/frontend-service:latest
+push-vm-job:
+	docker push docker.io/boygioi/vm-job:latest
 push-forecasting-service: 
 	docker push docker.io/boygioi/forecasting-service:latest
 
