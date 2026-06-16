@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     prometheus_base_url: str = (
         "http://monitoring-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090"
     )
-    prometheus_timeout_seconds: float = Field(default=10.0, gt=0)
+    prometheus_timeout_seconds: float = Field(default=30.0, gt=0)
 
     remote_model_timeout_seconds: float = Field(default=15.0, gt=0)
 

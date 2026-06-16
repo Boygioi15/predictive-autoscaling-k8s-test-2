@@ -1,84 +1,232 @@
-/*
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
-import (
-	"context"
+import "testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+func TestHasSustainedIngressPressureReturnsTrueWhenRecentPointsAreAboveThreshold(t *testing.T) {
+	policy := scalingPolicy{
+		IngressP95ThresholdSec:        0.50,
+		IngressPressureRequiredPoints: 3,
+	}
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	underPressure, reason := hasSustainedIngressPressure(
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				float64Ptr(0.30),
+				float64Ptr(0.60),
+				float64Ptr(0.70),
+				float64Ptr(0.80),
+			},
+		},
+		policy,
+	)
 
-	autoscalingv1 "github.com/Boygioi15/predictive-autoscaling-k8s-test/api/v1"
-)
+	if !underPressure {
+		t.Fatalf("expected sustained ingress pressure to be true")
+	}
+	if reason != "recent-ingress-p95-all-above-threshold" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
 
-var _ = Describe("CustomScaler Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+func TestHasSustainedIngressPressureReturnsFalseWhenRecentIngressPointsAreNotAllAboveThreshold(t *testing.T) {
+	policy := scalingPolicy{
+		IngressP95ThresholdSec:        0.50,
+		IngressPressureRequiredPoints: 3,
+	}
 
-		ctx := context.Background()
+	underPressure, reason := hasSustainedIngressPressure(
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				float64Ptr(0.60),
+				float64Ptr(0.70),
+				float64Ptr(0.40),
+			},
+		},
+		policy,
+	)
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
-		customscaler := &autoscalingv1.CustomScaler{}
+	if underPressure {
+		t.Fatalf("expected sustained ingress pressure to be false")
+	}
+	if reason != "recent-ingress-p95-not-all-above-threshold" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
 
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind CustomScaler")
-			err := k8sClient.Get(ctx, typeNamespacedName, customscaler)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &autoscalingv1.CustomScaler{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-		})
+func TestHasSustainedIngressPressureReturnsFalseWhenThereAreFewerThanRequiredValidIngressPoints(t *testing.T) {
+	policy := scalingPolicy{
+		IngressP95ThresholdSec:        0.50,
+		IngressPressureRequiredPoints: 3,
+	}
 
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &autoscalingv1.CustomScaler{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
+	underPressure, reason := hasSustainedIngressPressure(
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				nil,
+				float64Ptr(0.70),
+				float64Ptr(0.80),
+			},
+		},
+		policy,
+	)
 
-			By("Cleanup the specific resource instance CustomScaler")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &CustomScalerReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
+	if underPressure {
+		t.Fatalf("expected sustained ingress pressure to be false")
+	}
+	if reason != "insufficient-ingress-history" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
-		})
-	})
-})
+func TestNextIngressPressureBumpIncreasesWhenPressurePersists(t *testing.T) {
+	policy := scalingPolicy{
+		IngressP95ThresholdSec:        0.50,
+		IngressPressureRequiredPoints: 3,
+		IngressPressureIncreaseStep:   1,
+		IngressPressureDecreaseStep:   2,
+		IngressPressureMaxBump:        10,
+	}
+
+	next, reason := nextIngressPressureBump(
+		2,
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				float64Ptr(0.60),
+				float64Ptr(0.70),
+				float64Ptr(0.80),
+			},
+		},
+		policy,
+	)
+
+	if next != 3 {
+		t.Fatalf("expected next bump to be 3, got %d", next)
+	}
+	if reason != "recent-ingress-p95-all-above-threshold" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestNextIngressPressureBumpDecaysWhenPressureClears(t *testing.T) {
+	policy := scalingPolicy{
+		IngressP95ThresholdSec:        0.50,
+		IngressPressureRequiredPoints: 3,
+		IngressPressureIncreaseStep:   1,
+		IngressPressureDecreaseStep:   2,
+		IngressPressureMaxBump:        10,
+	}
+
+	next, reason := nextIngressPressureBump(
+		3,
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				float64Ptr(0.40),
+				float64Ptr(0.30),
+				float64Ptr(0.20),
+			},
+		},
+		policy,
+	)
+
+	if next != 1 {
+		t.Fatalf("expected next bump to decay to 1, got %d", next)
+	}
+	if reason != "recent-ingress-p95-not-all-above-threshold" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestNextIngressPressureBumpClampsAtZeroAndMax(t *testing.T) {
+	policy := scalingPolicy{
+		IngressP95ThresholdSec:        0.50,
+		IngressPressureRequiredPoints: 3,
+		IngressPressureIncreaseStep:   2,
+		IngressPressureDecreaseStep:   2,
+		IngressPressureMaxBump:        4,
+	}
+
+	high, _ := nextIngressPressureBump(
+		3,
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				float64Ptr(0.60),
+				float64Ptr(0.70),
+				float64Ptr(0.80),
+			},
+		},
+		policy,
+	)
+	if high != 4 {
+		t.Fatalf("expected next bump to clamp at 4, got %d", high)
+	}
+
+	low, _ := nextIngressPressureBump(
+		1,
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				float64Ptr(0.10),
+				float64Ptr(0.20),
+				float64Ptr(0.30),
+			},
+		},
+		policy,
+	)
+	if low != 0 {
+		t.Fatalf("expected next bump to clamp at 0, got %d", low)
+	}
+}
+
+func TestAllowIngressScaleDownAllowsOnlyWhenLastThreeIngressPointsAreBelowThreshold(t *testing.T) {
+	policy := scalingPolicy{
+		IngressP95ThresholdSec:        0.50,
+		IngressPressureRequiredPoints: 3,
+	}
+
+	allowed, reason := allowIngressScaleDown(
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				float64Ptr(0.70),
+				float64Ptr(0.40),
+				float64Ptr(0.30),
+				float64Ptr(0.20),
+			},
+		},
+		policy,
+	)
+
+	if !allowed {
+		t.Fatalf("expected ingress scale down to be allowed, got false with reason %q", reason)
+	}
+	if reason != "recent-ingress-p95-all-below-threshold" {
+		t.Fatalf("unexpected reason: %s", reason)
+	}
+}
+
+func TestAllowIngressScaleDownBlocksWhenRecentIngressPointTouchesThreshold(t *testing.T) {
+	policy := scalingPolicy{
+		IngressP95ThresholdSec:        0.50,
+		IngressPressureRequiredPoints: 3,
+	}
+
+	allowed, reason := allowIngressScaleDown(
+		map[string][]*float64{
+			"ingress_p95_seconds": {
+				float64Ptr(0.40),
+				float64Ptr(0.50),
+				float64Ptr(0.20),
+			},
+		},
+		policy,
+	)
+
+	if allowed {
+		t.Fatalf("expected ingress scale down to be blocked")
+	}
+	if reason == "" {
+		t.Fatalf("expected a non-empty reason")
+	}
+}
+
+func float64Ptr(value float64) *float64 {
+	return &value
+}

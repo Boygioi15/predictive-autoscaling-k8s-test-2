@@ -5,13 +5,13 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  SCALER_WORKER_LOAD_BALANCER_ID=<lb-id> \
+  VULTR_LOAD_BALANCER_ID=<lb-id> \
   [SCALER_WORKER_NODE_NAME_PREFIX=k3s-worker] \
   [WORKER_E2E_SCRIPT_PATH=/workspace/linux-script/create-worker-e2e.sh] \
   ./linux-script/executor-create-worker.sh [node-name]
 
 Example:
-  SCALER_WORKER_LOAD_BALANCER_ID=abcd1234 \
+  VULTR_LOAD_BALANCER_ID=abcd1234 \
   SCALER_WORKER_NODE_NAME_PREFIX=k3s-worker \
   ./linux-script/executor-create-worker.sh
 EOF
@@ -62,7 +62,7 @@ main() {
     exit 1
   fi
 
-  require_env SCALER_WORKER_LOAD_BALANCER_ID
+  require_env VULTR_LOAD_BALANCER_ID
 
   local node_name="${1:-}"
   local script_path="${WORKER_E2E_SCRIPT_PATH:-./linux-script/create-worker-e2e.sh}"
@@ -79,7 +79,7 @@ main() {
   fi
 
   echo "Starting worker create flow for node ${node_name}..."
-  exec "${script_path}" "${SCALER_WORKER_LOAD_BALANCER_ID}" "${node_name}"
+  exec "${script_path}" "${VULTR_LOAD_BALANCER_ID}" "${node_name}"
 }
 
 main "$@"

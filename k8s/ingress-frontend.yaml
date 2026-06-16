@@ -2,19 +2,17 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ingress-frontend
-  annotations:
+
 spec:
   ingressClassName: nginx
   rules:
-    - host: silkeste.fun
-      http:
+    # - host: silkeste.fun
+    - http:
         paths:
-          # LUẬT 1: FRONTEND (Ưu tiên thấp nhất, để cuối)
           - path: /
             pathType: Prefix
             backend:
               service:
                 name: frontend
                 port:
-                  number: 80 # Port của Service Frontend
-
+                  number: 80

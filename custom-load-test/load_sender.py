@@ -136,15 +136,15 @@ def load_runtime_config() -> SenderConfig:
             raise ValueError("WORKER_INDEX must be in [0, WORKER_COUNT)")
 
     return SenderConfig(
-        script_path=Path(os.getenv("SCRIPT_CSV_PATH", "/mnt/shares/test_script.csv")),
-        request_report_path=Path(os.getenv("REQUEST_REPORT_PATH", "/mnt/shares/load_test_request_report.csv")),
+        script_path=Path(os.getenv("SCRIPT_CSV_PATH", "/app/scripts/test_script.csv")),
+        request_report_path=Path(os.getenv("REQUEST_REPORT_PATH", "/app/output/load_test_request_report.csv")),
         statistics_report_path=Path(
-            os.getenv("STATISTICS_REPORT_PATH", "/mnt/shares/load_test_statistics_report.csv")
+            os.getenv("STATISTICS_REPORT_PATH", "/app/output/load_test_statistics_report.csv")
         ),
         incident_report_path=Path(
-            os.getenv("INCIDENT_REPORT_PATH", "/mnt/shares/load_test_incident_report.csv")
+            os.getenv("INCIDENT_REPORT_PATH", "/app/output/load_test_incident_report.csv")
         ),
-        metadata_path=Path(os.getenv("METADATA_PATH", "/mnt/shares/load_test_metadata.csv")),
+        metadata_path=Path(os.getenv("METADATA_PATH", "/app/output/load_test_metadata.csv")),
         heartbeat_path=(
             Path(os.environ["HEARTBEAT_PATH"])
             if os.getenv("HEARTBEAT_PATH")

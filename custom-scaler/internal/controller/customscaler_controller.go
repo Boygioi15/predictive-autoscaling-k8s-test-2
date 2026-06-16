@@ -42,16 +42,20 @@ import (
 // CustomScalerReconciler reconciles a CustomScaler object
 type CustomScalerReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	PolicyDefaults ScalingDefaults
-	WorkerExecutor WorkerExecutorConfig
+	Scheme                 *runtime.Scheme
+	PolicyDefaults         ScalingDefaults
+	WorkerCapacityDefaults WorkerCapacityDefaults
+	WorkerExecutor         WorkerExecutorConfig
 }
 
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=autoscaling.my.domain,resources=customscalers/finalizers,verbs=update
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments;daemonsets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch;update;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
+// +kubebuilder:rbac:groups=policy,resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -127,7 +131,17 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	policy := r.scalingPolicyFor(&customScaler)
 	normalizedPredictions, predictionUnit := normalizeForecastPredictions(forecast)
+	currentIngressPressureBump := customScaler.Status.IngressPressureBump
+	nextIngressPressureBump, ingressPressureBumpReason := nextIngressPressureBump(currentIngressPressureBump, forecast.Observed, policy)
+	ingressPressureWorkerBump := nextIngressPressureBump * policy.IngressPressureWorkerStep
 	desiredReplicas, peakRPS, effectiveRPS := calculateDesiredReplicas(normalizedPredictions, policy)
+	ingressPressureReplicaBump := nextIngressPressureBump * policy.IngressPressureReplicaStep
+	if ingressPressureReplicaBump > 0 {
+		desiredReplicas += ingressPressureReplicaBump
+		if desiredReplicas > policy.MaxReplicas {
+			desiredReplicas = policy.MaxReplicas
+		}
+	}
 	log.Info(
 		"Calculated desired replicas from forecast",
 		"targetDeployment", customScaler.Spec.DeploymentName,
@@ -140,7 +154,15 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		"safeRPSPerPod", policy.SafeRPSPerPod,
 		"safetyFactor", policy.SafetyFactor,
 		"sparePod", policy.SparePod,
+		"maxReplicas", policy.MaxReplicas,
+		"minPReplicas", policy.MinReplicas,
 		"desiredReplicas", desiredReplicas,
+		"currentIngressPressureBump", currentIngressPressureBump,
+		"nextIngressPressureBump", nextIngressPressureBump,
+		"ingressPressureBumpReason", ingressPressureBumpReason,
+		"ingressPressureReplicaBump", ingressPressureReplicaBump,
+		"ingressPressureWorkerBump", ingressPressureWorkerBump,
+		"ingressPressureWorkerBumpReason", ingressPressureBumpReason,
 	)
 
 	// 3. Analyze & Act: Find the Target Deployment
@@ -169,6 +191,9 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				"forecastDeployment", forecastDeploymentName(&customScaler),
 				"currentReplicas", currentReplicas,
 				"desiredReplicas", desiredReplicas,
+				"currentIngressPressureBump", currentIngressPressureBump,
+				"nextIngressPressureBump", nextIngressPressureBump,
+				"ingressPressureReplicaBump", ingressPressureReplicaBump,
 				"scaleDownPolicy", policy.ScaleDownPolicy,
 				"scaleDownReason", scaleDownReason,
 				"observed", forecast.Observed,
@@ -185,12 +210,20 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	workerPlan, err := r.reconcileWorkerPrototype(ctx, &customScaler, time.Now())
+	workerNow := time.Now()
+	workerPlan, workerTarget, err := r.reconcileWorkerPrototype(
+		ctx,
+		&customScaler,
+		&deployment,
+		desiredReplicas,
+		ingressPressureWorkerBump,
+		workerNow,
+	)
 	if err != nil {
 		log.Error(err, "Failed to reconcile worker prototype state")
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
-	if err := r.reconcileWorkerExecutor(ctx, &customScaler, workerPlan, time.Now()); err != nil {
+	if err := r.reconcileWorkerExecutor(ctx, &customScaler, workerPlan, workerNow); err != nil {
 		log.Error(err, "Failed to reconcile worker prototype executor")
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
@@ -199,7 +232,30 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		customScaler.Status.WorkerPrototype = &workerPlan.Status
 		log.Info(
 			"Worker prototype ensure_worker evaluated",
+			"workerTargetMode", workerTarget.Mode,
+			"workerCapacityStrategy", workerTarget.Strategy,
 			"targetWorkers", workerPlan.Status.TargetWorkerCount,
+			"rawTargetWorkers", workerTarget.RawTargetWorkerCount,
+			"desiredReplicas", workerTarget.DesiredReplicas,
+			"unschedulablePods", workerTarget.UnschedulablePods,
+			"safetyPods", workerTarget.SafetyPods,
+			"currentIngressPressureBump", currentIngressPressureBump,
+			"nextIngressPressureBump", nextIngressPressureBump,
+			"ingressPressureBumpReason", ingressPressureBumpReason,
+			"ingressPressureReplicaBump", ingressPressureReplicaBump,
+			"ingressPressureWorkerBump", ingressPressureWorkerBump,
+			"ingressPressureWorkerBumpReason", ingressPressureBumpReason,
+			"desiredPodsForCapacity", workerTarget.DesiredPodsForCapacity,
+			"nodeAllocatableMilliCPU", workerTarget.NodeAllocatableMilliCPU,
+			"podRequestMilliCPU", workerTarget.PodRequestMilliCPU,
+			"podsPerWorker", workerTarget.PodsPerWorker,
+			"minWorkerCount", workerTarget.MinWorkerCount,
+			"maxWorkerCount", workerTarget.MaxWorkerCount,
+			"readyWorkerCount", workerTarget.ReadyWorkerCount,
+			"currentAppScheduledPods", workerTarget.CurrentAppScheduledPods,
+			"totalAppSlotCapacity", workerTarget.TotalAppSlotCapacity,
+			"missingAppSlots", workerTarget.MissingAppSlots,
+			"requiredReadyWorkers", workerTarget.RequiredReadyWorkers,
 			"observedReadyWorkers", workerPlan.Status.ObservedReadyWorkerCount,
 			"pendingCreateWorkers", workerPlan.Status.PendingCreateCount,
 			"pendingDeleteWorkers", workerPlan.Status.PendingDeleteCount,
@@ -212,17 +268,29 @@ func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Update status only when it actually changed, otherwise we create extra reconcile events.
+	ingressPressureStatusChanged := customScaler.Status.IngressPressureBump != nextIngressPressureBump ||
+		customScaler.Status.IngressPressureReason != ingressPressureBumpReason
 	if customScaler.Status.LastForecastPeak != peakRPS ||
 		customScaler.Status.LastEffectiveRPS != effectiveRPS ||
 		customScaler.Status.LastDesiredReplicas != desiredReplicas ||
 		customScaler.Status.CurrentReplicas != desiredReplicas ||
+		ingressPressureStatusChanged ||
 		workerStatusChanged {
 		customScaler.Status.LastForecastPeak = peakRPS
 		customScaler.Status.LastEffectiveRPS = effectiveRPS
 		customScaler.Status.LastDesiredReplicas = desiredReplicas
 		customScaler.Status.CurrentReplicas = desiredReplicas
+		customScaler.Status.IngressPressureBump = nextIngressPressureBump
+		customScaler.Status.IngressPressureReason = ingressPressureBumpReason
 		if err := r.Status().Update(ctx, &customScaler); err != nil {
 			log.Error(err, "Failed to update custom scaler status")
+			return ctrl.Result{RequeueAfter: requeueAfter}, nil
+		}
+	}
+
+	if workerPlan != nil {
+		if err := r.reconcileIngressDeployment(ctx, forecast.Observed, policy, workerPlan.Status.ObservedReadyWorkerCount); err != nil {
+			log.Error(err, "Failed to reconcile ingress deployment")
 			return ctrl.Result{RequeueAfter: requeueAfter}, nil
 		}
 	}
@@ -248,14 +316,23 @@ type forecastResponse struct {
 }
 
 type scalingPolicy struct {
-	SafeRPSPerPod          float64
-	SafetyFactor           float64
-	SparePod               int32
-	MinReplicas            int32
-	MaxReplicas            int32
-	ScaleDownPolicy        string
-	AppP95ThresholdSeconds float64
-	IngressP95ThresholdSec float64
+	SafeRPSPerPod                 float64
+	SafetyFactor                  float64
+	SparePod                      int32
+	MinReplicas                   int32
+	MaxReplicas                   int32
+	ScaleDownPolicy               string
+	AppP95ThresholdSeconds        float64
+	IngressP95ThresholdSec        float64
+	IngressDeploymentName         string
+	IngressDeploymentNS           string
+	IngressReplicasPerWorker      int32
+	IngressPressureRequiredPoints int32
+	IngressPressureIncreaseStep   int32
+	IngressPressureDecreaseStep   int32
+	IngressPressureMaxBump        int32
+	IngressPressureWorkerStep     int32
+	IngressPressureReplicaStep    int32
 }
 
 func parseForecastResponse(body []byte) (forecastResponse, error) {
@@ -303,14 +380,23 @@ func (r *CustomScalerReconciler) scalingPolicyFor(customScaler *autoscalingv1.Cu
 	defaults := r.PolicyDefaults.normalized()
 
 	policy := scalingPolicy{
-		SafeRPSPerPod:          defaults.SafeRPSPerPod,
-		SafetyFactor:           defaults.SafetyFactor,
-		SparePod:               defaults.SparePod,
-		MinReplicas:            defaults.MinReplicas,
-		MaxReplicas:            defaults.MaxReplicas,
-		ScaleDownPolicy:        defaults.ScaleDownPolicy,
-		AppP95ThresholdSeconds: defaults.AppP95ThresholdSeconds,
-		IngressP95ThresholdSec: defaults.IngressP95ThresholdSec,
+		SafeRPSPerPod:                 defaults.SafeRPSPerPod,
+		SafetyFactor:                  defaults.SafetyFactor,
+		SparePod:                      defaults.SparePod,
+		MinReplicas:                   defaults.MinReplicas,
+		MaxReplicas:                   defaults.MaxReplicas,
+		ScaleDownPolicy:               defaults.ScaleDownPolicy,
+		AppP95ThresholdSeconds:        defaults.AppP95ThresholdSeconds,
+		IngressP95ThresholdSec:        defaults.IngressP95ThresholdSec,
+		IngressDeploymentName:         defaults.IngressDeploymentName,
+		IngressDeploymentNS:           defaults.IngressDeploymentNS,
+		IngressReplicasPerWorker:      defaults.IngressReplicasPerWorker,
+		IngressPressureRequiredPoints: defaults.IngressPressureRequiredPoints,
+		IngressPressureIncreaseStep:   defaults.IngressPressureIncreaseStep,
+		IngressPressureDecreaseStep:   defaults.IngressPressureDecreaseStep,
+		IngressPressureMaxBump:        defaults.IngressPressureMaxBump,
+		IngressPressureWorkerStep:     defaults.IngressPressureWorkerStep,
+		IngressPressureReplicaStep:    defaults.IngressPressureReplicaStep,
 	}
 
 	if customScaler.Spec.SafeRPSPerPod != nil && *customScaler.Spec.SafeRPSPerPod > 0 {
@@ -333,6 +419,62 @@ func (r *CustomScalerReconciler) scalingPolicyFor(customScaler *autoscalingv1.Cu
 	}
 
 	return policy
+}
+
+func (r *CustomScalerReconciler) reconcileIngressDeployment(
+	ctx context.Context,
+	observed map[string][]*float64,
+	policy scalingPolicy,
+	observedReadyWorkers int32,
+) error {
+	if policy.IngressDeploymentName == "" || policy.IngressReplicasPerWorker <= 0 {
+		return nil
+	}
+
+	var ingressDeployment appsv1.Deployment
+	deploymentName := types.NamespacedName{
+		Namespace: policy.IngressDeploymentNS,
+		Name:      policy.IngressDeploymentName,
+	}
+	if err := r.Get(ctx, deploymentName, &ingressDeployment); err != nil {
+		return err
+	}
+
+	desiredReplicas := observedReadyWorkers * policy.IngressReplicasPerWorker
+	currentReplicas := int32(1)
+	if ingressDeployment.Spec.Replicas != nil {
+		currentReplicas = *ingressDeployment.Spec.Replicas
+	}
+
+	if desiredReplicas < currentReplicas {
+		allowed, reason := allowIngressScaleDown(observed, policy)
+		if !allowed {
+			logf.FromContext(ctx).Info(
+				"Skipping ingress scale down because recent ingress latency is not healthy enough",
+				"deployment", deploymentName.String(),
+				"currentReplicas", currentReplicas,
+				"desiredReplicas", desiredReplicas,
+				"scaleDownReason", reason,
+			)
+			return nil
+		}
+	}
+
+	if desiredReplicas == currentReplicas {
+		return nil
+	}
+
+	logf.FromContext(ctx).Info(
+		"Scaling ingress deployment",
+		"deployment", deploymentName.String(),
+		"oldReplicas", currentReplicas,
+		"newReplicas", desiredReplicas,
+		"observedReadyWorkers", observedReadyWorkers,
+		"replicasPerWorker", policy.IngressReplicasPerWorker,
+	)
+
+	ingressDeployment.Spec.Replicas = &desiredReplicas
+	return r.Update(ctx, &ingressDeployment)
 }
 
 func calculateDesiredReplicas(predictions []float64, policy scalingPolicy) (int32, float64, float64) {
@@ -418,6 +560,89 @@ func allowScaleDown(observed map[string][]*float64, policy scalingPolicy) (bool,
 	return true, "all-guardrails-healthy"
 }
 
+func allowIngressScaleDown(observed map[string][]*float64, policy scalingPolicy) (bool, string) {
+	requiredRecentPoints := int(policy.IngressPressureRequiredPoints)
+	if requiredRecentPoints <= 0 {
+		requiredRecentPoints = 1
+	}
+
+	ingressSeries := observed["ingress_p95_seconds"]
+	if len(ingressSeries) == 0 {
+		return false, "missing-ingress-history"
+	}
+
+	recentValues := make([]float64, 0, requiredRecentPoints)
+	for index := len(ingressSeries) - 1; index >= 0 && len(recentValues) < requiredRecentPoints; index-- {
+		value := ingressSeries[index]
+		if value == nil {
+			continue
+		}
+		recentValues = append(recentValues, *value)
+	}
+
+	if len(recentValues) < requiredRecentPoints {
+		return false, "insufficient-ingress-history"
+	}
+
+	for _, value := range recentValues {
+		if value >= policy.IngressP95ThresholdSec {
+			return false, fmt.Sprintf("recent-ingress-p95-not-all-below-threshold: %.3f >= %.3f", value, policy.IngressP95ThresholdSec)
+		}
+	}
+
+	return true, "recent-ingress-p95-all-below-threshold"
+}
+
+func nextIngressPressureBump(currentBump int32, observed map[string][]*float64, policy scalingPolicy) (int32, string) {
+	underPressure, reason := hasSustainedIngressPressure(observed, policy)
+	if underPressure {
+		next := currentBump + policy.IngressPressureIncreaseStep
+		if policy.IngressPressureMaxBump > 0 && next > policy.IngressPressureMaxBump {
+			next = policy.IngressPressureMaxBump
+		}
+		return next, reason
+	}
+
+	next := currentBump - policy.IngressPressureDecreaseStep
+	if next < 0 {
+		next = 0
+	}
+	return next, reason
+}
+
+func hasSustainedIngressPressure(observed map[string][]*float64, policy scalingPolicy) (bool, string) {
+	requiredRecentPoints := int(policy.IngressPressureRequiredPoints)
+	if requiredRecentPoints <= 0 {
+		requiredRecentPoints = 1
+	}
+
+	ingressSeries := observed["ingress_p95_seconds"]
+	if len(ingressSeries) == 0 {
+		return false, "missing-ingress-history"
+	}
+
+	recentValues := make([]float64, 0, requiredRecentPoints)
+	for index := len(ingressSeries) - 1; index >= 0 && len(recentValues) < requiredRecentPoints; index-- {
+		value := ingressSeries[index]
+		if value == nil {
+			continue
+		}
+		recentValues = append(recentValues, *value)
+	}
+
+	if len(recentValues) < requiredRecentPoints {
+		return false, "insufficient-ingress-history"
+	}
+
+	for _, value := range recentValues {
+		if value <= policy.IngressP95ThresholdSec {
+			return false, "recent-ingress-p95-not-all-above-threshold"
+		}
+	}
+
+	return true, "recent-ingress-p95-all-above-threshold"
+}
+
 func maxFloat64(values []float64) float64 {
 	if len(values) == 0 {
 		return 0
@@ -451,7 +676,7 @@ func workerPrototypeStatusChanged(
 		current.EffectiveWorkerCount != plan.Status.EffectiveWorkerCount ||
 		current.LastAction != plan.Status.LastAction ||
 		current.LastReason != plan.Status.LastReason ||
-		workerOperationChanged(current.ActiveOperation, plan.Status.ActiveOperation)
+		activeOperationSlicesChanged(cloneActiveOperations(current), cloneActiveOperations(&plan.Status))
 }
 
 func workerOperationChanged(current, next *autoscalingv1.WorkerOperationStatus) bool {
@@ -463,6 +688,7 @@ func workerOperationChanged(current, next *autoscalingv1.WorkerOperationStatus) 
 	}
 
 	return current.OperationType != next.OperationType ||
+		current.TargetNodeName != next.TargetNodeName ||
 		current.Phase != next.Phase ||
 		current.JobNamespace != next.JobNamespace ||
 		current.JobName != next.JobName ||

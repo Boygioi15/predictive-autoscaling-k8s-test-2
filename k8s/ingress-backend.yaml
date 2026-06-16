@@ -3,16 +3,16 @@ kind: Ingress
 metadata:
   name: ingress-backend
   annotations:
-    # Logic Rewrite giữ nguyên cho Backend
+    nginx.ingress.kubernetes.io/use-regex: "true"
     nginx.ingress.kubernetes.io/rewrite-target: /$1
     nginx.ingress.kubernetes.io/enable-access-log: "true"
+
 spec:
   ingressClassName: nginx
   rules:
-    - host: silkeste.fun # (Hoặc my-app.local tùy bạn chọn)
-      http:
+    - http:
         paths:
-          # Rule cho Prime
+          # Prime service
           - path: /api/prime/(.*)
             pathType: ImplementationSpecific
             backend:
@@ -20,7 +20,8 @@ spec:
                 name: prime-service
                 port:
                   number: 8080
-          # Rule cho Text
+
+          # Text service
           - path: /api/text/(.*)
             pathType: ImplementationSpecific
             backend:
@@ -28,7 +29,8 @@ spec:
                 name: text-service
                 port:
                   number: 8080
-          # Rule cho IO
+
+          # IO service
           - path: /api/io/(.*)
             pathType: ImplementationSpecific
             backend:

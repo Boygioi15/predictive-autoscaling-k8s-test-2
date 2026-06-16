@@ -48,6 +48,12 @@ require_command() {
   fi
 }
 
+extract_ssh_host() {
+  local ssh_target="$1"
+  local host="${ssh_target##*@}"
+  printf '%s\n' "${host}"
+}
+
 generate_node_name() {
   local prefix="${WORKER_NODE_NAME_PREFIX:-k3s-worker}"
   printf '%s-%s-%04d\n' "${prefix}" "$(date +%s)" "$(( RANDOM % 10000 ))"
@@ -92,16 +98,50 @@ wait_for_node_ready() {
   echo "Waiting for node ${node_name} to become Ready..."
   kubectl wait --for=condition=Ready "node/${node_name}" --timeout="${timeout}"
 }
-remove_private_ip_known_host() {
-  local private_ip="$1"
+
+remove_stale_known_host() {
+  local ssh_target="$1"
   local known_hosts_file="${SSH_KNOWN_HOSTS_FILE:-$HOME/.ssh/known_hosts}"
+  local ssh_host
+
+  ssh_host="$(extract_ssh_host "${ssh_target}")"
 
   mkdir -p "$(dirname "${known_hosts_file}")"
   touch "${known_hosts_file}"
 
-  echo "Removing stale SSH host key for private IP ${private_ip}..."
-  ssh-keygen -R "${private_ip}" -f "${known_hosts_file}" >/dev/null 2>&1 || true
-  ssh-keygen -R "[${private_ip}]:22" -f "${known_hosts_file}" >/dev/null 2>&1 || true
+  echo "Removing stale SSH host key for ${ssh_host}..."
+  ssh-keygen -R "${ssh_host}" -f "${known_hosts_file}" >/dev/null 2>&1 || true
+  ssh-keygen -R "[${ssh_host}]:22" -f "${known_hosts_file}" >/dev/null 2>&1 || true
+}
+
+wait_for_ssh_ready() {
+  local ssh_target="$1"
+  local known_hosts_file="${SSH_KNOWN_HOSTS_FILE:-$HOME/.ssh/known_hosts}"
+  local timeout_seconds="${SSH_READY_TIMEOUT_SECONDS:-300}"
+  local poll_interval_seconds="${SSH_READY_POLL_INTERVAL_SECONDS:-5}"
+  local connect_timeout_seconds="${SSH_READY_CONNECT_TIMEOUT_SECONDS:-5}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local ssh_opts="${SSH_OPTS:-}"
+  local attempt=1
+
+  if [[ -z "${ssh_opts}" ]]; then
+    ssh_opts="-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${known_hosts_file} -o ConnectTimeout=${connect_timeout_seconds}"
+  fi
+
+  echo "Waiting for SSH on ${ssh_target}..."
+  while (( SECONDS < deadline )); do
+    if ssh -v ${ssh_opts} "${ssh_target}" "true" >/dev/null; then
+      echo "SSH is ready on ${ssh_target}."
+      return
+    fi
+
+    echo "  SSH not ready yet on ${ssh_target} (attempt ${attempt}), retrying in ${poll_interval_seconds}s..."
+    attempt=$((attempt + 1))
+    sleep "${poll_interval_seconds}"
+  done
+
+  echo "Timed out waiting for SSH on ${ssh_target} after ${timeout_seconds}s." >&2
+  exit 1
 }
 
 main() {
@@ -125,7 +165,7 @@ main() {
   local node_name="${2:-}"
   local flannel_iface="${FLANNEL_IFACE_DEFAULT:-enp8s0}"
   local bootstrap_ssh_user="${VULTR_BOOTSTRAP_SSH_USER:-root}"
-  local bootstrap_ssh_host_mode="${BOOTSTRAP_SSH_HOST_MODE:-public}"
+  local bootstrap_ssh_host_mode="${BOOTSTRAP_SSH_HOST_MODE:-private}"
   local ssh_target_host=""
 
   if [[ -z "${node_name}" ]]; then
@@ -149,8 +189,6 @@ main() {
     exit 1
   fi
 
-  remove_private_ip_known_host "${private_ip}"
-
   case "${bootstrap_ssh_host_mode}" in
     public)
       ssh_target_host="${public_ip}"
@@ -163,6 +201,10 @@ main() {
       exit 1
       ;;
   esac
+
+  remove_stale_known_host "${private_ip}"
+  remove_stale_known_host "${bootstrap_ssh_user}@${ssh_target_host}"
+  wait_for_ssh_ready "${bootstrap_ssh_user}@${ssh_target_host}"
 
   echo
   echo "Step 2/4: join node ${node_name} to the cluster..."

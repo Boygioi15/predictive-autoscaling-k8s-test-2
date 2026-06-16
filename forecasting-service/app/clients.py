@@ -8,6 +8,15 @@ from .config import settings
 from .models import PrometheusQueryRangeResponse, RemotePredictionRequest
 
 
+def _format_prometheus_duration(seconds: float) -> str:
+    whole_seconds = int(seconds)
+    if math.isclose(seconds, whole_seconds):
+        return f"{whole_seconds}s"
+
+    milliseconds = max(1, math.ceil(seconds * 1000))
+    return f"{milliseconds}ms"
+
+
 class PrometheusClient:
     async def query_range(
         self,
@@ -24,6 +33,7 @@ class PrometheusClient:
             "start": start.timestamp(),
             "end": end.timestamp(),
             "step": f"{step_seconds}s",
+            "timeout": _format_prometheus_duration(settings.prometheus_timeout_seconds),
         }
 
         async with httpx.AsyncClient(timeout=settings.prometheus_timeout_seconds) as client:

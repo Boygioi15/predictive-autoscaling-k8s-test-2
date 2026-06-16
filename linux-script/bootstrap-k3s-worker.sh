@@ -51,6 +51,8 @@ configure_ufw() {
   ufw allow 22/tcp
   ufw allow 80/tcp
   ufw allow 8472/udp
+  ufw allow 9100/udp
+  ufw allow 9100/tcp
   ufw allow 10250/tcp
 
   if [[ "${ALLOW_HTTPS}" == "true" ]]; then

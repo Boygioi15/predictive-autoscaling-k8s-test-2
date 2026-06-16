@@ -1,0 +1,104 @@
+# kube-prometheus-stack values for an infra-only master node.
+#
+# Prerequisites:
+# - Label the master node with: kubectl label node <master-node> role=infra --overwrite
+# - Taint the master node with: kubectl taint node <master-node> role=infra:NoSchedule --overwrite
+#
+# Why local-path is acceptable here:
+# - local-path uses node-local disk.
+# - WaitForFirstConsumer delays PV binding until the Prometheus pod is scheduled.
+# - Because Prometheus is pinned to role=infra, its PVC should bind on the master node.
+
+prometheus:
+  prometheusSpec:
+    nodeSelector:
+      role: infra
+    tolerations:
+      - key: role
+        operator: Equal
+        value: infra
+        effect: NoSchedule
+    retention: 14d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 30Gi
+
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector:
+      role: infra
+    tolerations:
+      - key: role
+        operator: Equal
+        value: infra
+        effect: NoSchedule
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 5Gi
+
+grafana:
+  nodeSelector:
+    role: infra
+  tolerations:
+    - key: role
+      operator: Equal
+      value: infra
+      effect: NoSchedule
+  persistence:
+    enabled: false
+
+prometheusOperator:
+  nodeSelector:
+    role: infra
+  tolerations:
+    - key: role
+      operator: Equal
+      value: infra
+      effect: NoSchedule
+  admissionWebhooks:
+    patch:
+      nodeSelector:
+        role: infra
+      tolerations:
+        - key: role
+          operator: Equal
+          value: infra
+          effect: NoSchedule
+
+upgradeJob:
+  nodeSelector:
+    role: infra
+  tolerations:
+    - key: role
+      operator: Equal
+      value: infra
+      effect: NoSchedule
+
+kube-state-metrics:
+  nodeSelector:
+    role: infra
+  tolerations:
+    - key: role
+      operator: Equal
+      value: infra
+      effect: NoSchedule
+
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists
+    - key: role
+      operator: Equal
+      value: infra
+      effect: NoSchedule

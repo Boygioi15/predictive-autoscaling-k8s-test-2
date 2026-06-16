@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -22,29 +23,70 @@ type workerPrototypePlan struct {
 func (r *CustomScalerReconciler) reconcileWorkerPrototype(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
+	deployment *appsv1.Deployment,
+	desiredReplicas int32,
+	additionalWorkerTarget int32,
 	now time.Time,
-) (*workerPrototypePlan, error) {
+) (*workerPrototypePlan, workerTargetComputation, error) {
 	spec := customScaler.Spec.WorkerPrototype
-	if spec == nil || spec.TargetWorkerCount == nil {
-		return nil, nil
+	if spec == nil {
+		return nil, workerTargetComputation{}, nil
 	}
 
-	observedReady, err := r.countReadyWorkerNodes(ctx, spec)
+	target, err := r.resolveWorkerTargetCount(ctx, customScaler, deployment, desiredReplicas)
 	if err != nil {
-		return nil, err
+		return nil, workerTargetComputation{}, err
+	}
+	// disable the node scaling bump
+	// if additionalWorkerTarget > 0 {
+	// 	target.RawTargetWorkerCount += additionalWorkerTarget
+	// 	target.TargetWorkerCount += additionalWorkerTarget
+	// 	target = applyWorkerTargetBounds(target, r.WorkerCapacityDefaults.normalized())
+	// }
+
+	effectiveSpec := spec.DeepCopy()
+	effectiveSpec.TargetWorkerCount = &target.TargetWorkerCount
+
+	observedReady, err := r.countReadyWorkerNodes(ctx, effectiveSpec)
+	if err != nil {
+		return nil, workerTargetComputation{}, err
 	}
 
-	plan := ensureWorkers(spec, customScaler.Status.WorkerPrototype, observedReady, now)
-	return &plan, nil
+	plan := ensureWorkers(
+		effectiveSpec,
+		customScaler.Status.WorkerPrototype,
+		observedReady,
+		target.UnschedulablePods,
+		r.WorkerExecutor.MaxConcurrentCreateOps,
+		r.WorkerExecutor.MaxConcurrentDeleteOps,
+		now,
+	)
+	return &plan, target, nil
 }
 
 func (r *CustomScalerReconciler) countReadyWorkerNodes(ctx context.Context, spec *autoscalingv1.WorkerPrototypeSpec) (int32, error) {
-	var nodeList corev1.NodeList
-	if err := r.List(ctx, &nodeList); err != nil {
+	nodes, err := r.listManagedWorkerNodes(ctx, spec)
+	if err != nil {
 		return 0, err
 	}
 
 	var count int32
+	for _, node := range nodes {
+		if isNodeReady(&node) {
+			count++
+		}
+	}
+
+	return count, nil
+}
+
+func (r *CustomScalerReconciler) listManagedWorkerNodes(ctx context.Context, spec *autoscalingv1.WorkerPrototypeSpec) ([]corev1.Node, error) {
+	var nodeList corev1.NodeList
+	if err := r.List(ctx, &nodeList); err != nil {
+		return nil, err
+	}
+
+	nodes := make([]corev1.Node, 0, len(nodeList.Items))
 	for _, node := range nodeList.Items {
 		if _, isControlPlane := node.Labels["node-role.kubernetes.io/control-plane"]; isControlPlane {
 			continue
@@ -60,21 +102,32 @@ func (r *CustomScalerReconciler) countReadyWorkerNodes(ctx context.Context, spec
 			}
 		}
 
-		if isNodeReady(&node) {
-			count++
-		}
+		nodes = append(nodes, node)
 	}
 
-	return count, nil
+	return nodes, nil
 }
 
 func ensureWorkers(
 	spec *autoscalingv1.WorkerPrototypeSpec,
 	current *autoscalingv1.WorkerPrototypeStatus,
 	observedReady int32,
+	unschedulablePods int32,
+	maxConcurrentCreateOps int32,
+	maxConcurrentDeleteOps int32,
 	now time.Time,
 ) workerPrototypePlan {
-	maxBatchSize := defaultWorkerPrototypeBatchSize
+	if maxConcurrentCreateOps <= 0 {
+		maxConcurrentCreateOps = 1
+	}
+	if maxConcurrentDeleteOps <= 0 {
+		maxConcurrentDeleteOps = 1
+	}
+
+	maxBatchSize := maxConcurrentCreateOps
+	if maxConcurrentDeleteOps > maxBatchSize {
+		maxBatchSize = maxConcurrentDeleteOps
+	}
 	if spec.MaxBatchSize != nil && *spec.MaxBatchSize > 0 {
 		maxBatchSize = *spec.MaxBatchSize
 	}
@@ -83,45 +136,96 @@ func ensureWorkers(
 	status := autoscalingv1.WorkerPrototypeStatus{}
 	if current != nil {
 		status = *current
-		if current.ActiveOperation != nil {
-			activeOperationCopy := *current.ActiveOperation
-			status.ActiveOperation = &activeOperationCopy
-		}
+		status.ActiveOperations = cloneActiveOperations(current)
 	}
 
-	pendingCreate := status.PendingCreateCount
-	pendingDelete := status.PendingDeleteCount
-	baseEffectiveWorkerCount := observedReady + pendingCreate - pendingDelete
+	rawActiveCreateCount, rawActiveDeleteCount := sumActiveOperationCounts(status.ActiveOperations)
+	pendingCreate := rawActiveCreateCount
+	pendingDelete := rawActiveDeleteCount
 
+	previousObservedReady := int32(0)
+	if current != nil {
+		previousObservedReady = current.ObservedReadyWorkerCount
+	}
+
+	completedCreateObservations := int32(0)
+	completedDeleteObservations := int32(0)
 	switch {
-	case observedReady > status.ObservedReadyWorkerCount:
-		completedCreates := minInt32(pendingCreate, observedReady-status.ObservedReadyWorkerCount)
-		pendingCreate -= completedCreates
-	case observedReady < status.ObservedReadyWorkerCount:
-		completedDeletes := minInt32(pendingDelete, status.ObservedReadyWorkerCount-observedReady)
-		pendingDelete -= completedDeletes
+	case observedReady > previousObservedReady:
+		completedCreateObservations = minInt32(pendingCreate, observedReady-previousObservedReady)
+		pendingCreate -= completedCreateObservations
+	case observedReady < previousObservedReady:
+		completedDeleteObservations = minInt32(pendingDelete, previousObservedReady-observedReady)
+		pendingDelete -= completedDeleteObservations
 	}
+
+	activeCreateSlotsUsed := maxInt32(rawActiveCreateCount-completedCreateObservations, 0)
+	activeDeleteSlotsUsed := maxInt32(rawActiveDeleteCount-completedDeleteObservations, 0)
 
 	effectiveWorkerCount := observedReady + pendingCreate - pendingDelete
 	workersToCreate := int32(0)
 	workersToDelete := int32(0)
 	lastAction := "stable"
 	lastReason := "target-satisfied"
+	baseEffectiveWorkerCount := effectiveWorkerCount
+
+	if len(status.ActiveOperations) > 0 {
+		lastAction = "waiting-active-operation"
+		lastReason = fmt.Sprintf(
+			"waiting for active worker operations to finish observation: %s",
+			formatActiveOperationSummary(status.ActiveOperations),
+		)
+	}
 
 	delta := targetWorkerCount - effectiveWorkerCount
 	switch {
 	case delta > 0:
-		workersToCreate = minInt32(delta, maxBatchSize)
-		pendingCreate += workersToCreate
-		effectiveWorkerCount += workersToCreate
-		lastAction = "enqueue-create"
-		lastReason = fmt.Sprintf("target=%d effective=%d missing=%d", targetWorkerCount, baseEffectiveWorkerCount, delta)
+		if activeDeleteSlotsUsed > 0 {
+			lastAction = "waiting-active-operation"
+			lastReason = fmt.Sprintf("delete operations in flight block new creates: activeDelete=%d", activeDeleteSlotsUsed)
+			break
+		}
+
+		availableCreateSlots := maxInt32(maxConcurrentCreateOps-activeCreateSlotsUsed, 0)
+		if availableCreateSlots <= 0 {
+			lastAction = "waiting-active-operation"
+			lastReason = fmt.Sprintf("create slots saturated: activeCreate=%d limit=%d target=%d effective=%d missing=%d", activeCreateSlotsUsed, maxConcurrentCreateOps, targetWorkerCount, baseEffectiveWorkerCount, delta)
+			break
+		}
+
+		workersToCreate = minInt32(delta, minInt32(maxBatchSize, availableCreateSlots))
+		if workersToCreate > 0 {
+			pendingCreate += workersToCreate
+			effectiveWorkerCount += workersToCreate
+			lastAction = "enqueue-create"
+			lastReason = fmt.Sprintf("target=%d effective=%d missing=%d", targetWorkerCount, baseEffectiveWorkerCount, delta)
+		}
 	case delta < 0:
-		workersToDelete = minInt32(-delta, maxBatchSize)
-		pendingDelete += workersToDelete
-		effectiveWorkerCount -= workersToDelete
-		lastAction = "enqueue-delete"
-		lastReason = fmt.Sprintf("target=%d effective=%d excess=%d", targetWorkerCount, baseEffectiveWorkerCount, -delta)
+		if activeCreateSlotsUsed > 0 {
+			lastAction = "waiting-active-operation"
+			lastReason = fmt.Sprintf("create operations in flight block new deletes: activeCreate=%d", activeCreateSlotsUsed)
+			break
+		}
+		if unschedulablePods > 0 {
+  			lastAction = "blocked-unschedulable-pods"
+			lastReason = fmt.Sprintf("unschedulable pods present block deletes: unschedulablePods=%d", unschedulablePods)
+			break
+		}
+
+		availableDeleteSlots := maxInt32(maxConcurrentDeleteOps-activeDeleteSlotsUsed, 0)
+		if availableDeleteSlots <= 0 {
+			lastAction = "waiting-active-operation"
+			lastReason = fmt.Sprintf("delete slots saturated: activeDelete=%d limit=%d target=%d effective=%d excess=%d", activeDeleteSlotsUsed, maxConcurrentDeleteOps, targetWorkerCount, baseEffectiveWorkerCount, -delta)
+			break
+		}
+
+		workersToDelete = minInt32(-delta, minInt32(maxBatchSize, availableDeleteSlots))
+		if workersToDelete > 0 {
+			pendingDelete += workersToDelete
+			effectiveWorkerCount -= workersToDelete
+			lastAction = "enqueue-delete"
+			lastReason = fmt.Sprintf("target=%d effective=%d excess=%d", targetWorkerCount, baseEffectiveWorkerCount, -delta)
+		}
 	}
 
 	ensureTime := metav1.NewTime(now)
@@ -133,6 +237,7 @@ func ensureWorkers(
 	status.LastAction = lastAction
 	status.LastReason = lastReason
 	status.LastEnsureTime = &ensureTime
+	syncLegacyActiveOperation(&status)
 
 	return workerPrototypePlan{
 		Status:          status,
@@ -149,6 +254,14 @@ func isNodeReady(node *corev1.Node) bool {
 	}
 
 	return false
+}
+
+func maxInt32(a, b int32) int32 {
+	if a > b {
+		return a
+	}
+
+	return b
 }
 
 func minInt32(a, b int32) int32 {

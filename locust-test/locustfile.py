@@ -10,16 +10,13 @@ def _configure_logging() -> None:
 
 _configure_logging()
 
-mode = os.getenv("MODE").lower()
+from users.prime_user import PrimeUser
+from users.text_user import TextUser
 
-if mode == "script":
-    from script_scheduler import ScriptDriverUser
-else:
-    from users.prime_user import PrimeUser
-    from users.text_user import TextUser
 
-    class PrimeWebsiteUser(PrimeUser):
-        weight = int(os.getenv("PRIME_USER_WEIGHT", 1))
+class PrimeWebsiteUser(PrimeUser):
+    weight = int(os.getenv("PRIME_USER_WEIGHT", 1))
 
-    class TextWebsiteUser(TextUser):
-        weight = int(os.getenv("TEXT_USER_WEIGHT", 2))
+
+class TextWebsiteUser(TextUser):
+    weight = int(os.getenv("TEXT_USER_WEIGHT", 2))

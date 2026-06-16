@@ -8,7 +8,10 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
+RUN mkdir -p /app/scripts /app/output
+
 COPY workload.py /app/workload.py
 COPY load_sender.py /app/load_sender.py
+COPY scripts /app/scripts
 
 CMD ["python", "-u", "/app/load_sender.py"]

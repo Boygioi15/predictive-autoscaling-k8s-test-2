@@ -9,12 +9,32 @@ rules:
   resources:
   - nodes
   verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - delete
   - get
   - list
   - watch
 - apiGroups:
+  - ""
+  - policy
+  resources:
+  - pods/eviction
+  verbs:
+  - create
+- apiGroups:
   - apps
   resources:
+  - daemonsets
   - deployments
   verbs:
   - get

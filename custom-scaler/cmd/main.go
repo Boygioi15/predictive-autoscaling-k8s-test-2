@@ -179,10 +179,11 @@ func main() {
 	}
 
 	if err := (&controller.CustomScalerReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		PolicyDefaults: controller.LoadScalingDefaultsFromEnv(),
-		WorkerExecutor: controller.LoadWorkerExecutorConfigFromEnv(),
+		Client:                 mgr.GetClient(),
+		Scheme:                 mgr.GetScheme(),
+		PolicyDefaults:         controller.LoadScalingDefaultsFromEnv(),
+		WorkerCapacityDefaults: controller.LoadWorkerCapacityDefaultsFromEnv(),
+		WorkerExecutor:         controller.LoadWorkerExecutorConfigFromEnv(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CustomScaler")
 		os.Exit(1)

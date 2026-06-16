@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -29,35 +30,93 @@ const (
 	defaultWorkerExecutorSecretName     = "custom-scaler-vm-job-secret"
 	defaultWorkerExecutorSecretMount    = "/var/run/vm-job-secret"
 	defaultWorkerExecutorTTLSeconds     = int32(3600)
+	defaultWorkerObservationTimeout     = 10 * time.Minute
 )
 
 type WorkerExecutorConfig struct {
-	Namespace          string
-	ServiceAccountName string
-	Image              string
-	CreateCommand      string
-	DeleteCommand      string
-	LoadBalancerID     string
-	NodeNamePrefix     string
-	ConfigMapName      string
-	SecretName         string
-	SecretMountPath    string
-	TTLSecondsAfterRun int32
+	Namespace              string
+	ServiceAccountName     string
+	Image                  string
+	CreateCommand          string
+	DeleteCommand          string
+	NodeNamePrefix         string
+	ConfigMapName          string
+	SecretName             string
+	SecretMountPath        string
+	TTLSecondsAfterRun     int32
+	ObservationTimeout     time.Duration
+	MaxConcurrentCreateOps int32
+	MaxConcurrentDeleteOps int32
+}
+
+type workerOperationExecution struct {
+	Command        string
+	TargetNodeName string
+}
+
+func controlPlaneAffinity() *corev1.Affinity {
+	return &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      "node-role.kubernetes.io/control-plane",
+								Operator: corev1.NodeSelectorOpExists,
+							},
+						},
+					},
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      "node-role.kubernetes.io/master",
+								Operator: corev1.NodeSelectorOpExists,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func controlPlaneTolerations() []corev1.Toleration {
+	return []corev1.Toleration{
+		{
+			Key:      "node-role.kubernetes.io/control-plane",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+		{
+			Key:      "node-role.kubernetes.io/master",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+		{
+			Key:      "role",
+			Operator: corev1.TolerationOpEqual,
+			Value:    "infra",
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+	}
 }
 
 func LoadWorkerExecutorConfigFromEnv() WorkerExecutorConfig {
 	return WorkerExecutorConfig{
-		Namespace:          envOrDefault("SCALER_WORKER_EXECUTOR_NAMESPACE", defaultWorkerExecutorNamespace),
-		ServiceAccountName: envOrDefault("SCALER_WORKER_EXECUTOR_SERVICE_ACCOUNT", defaultWorkerExecutorServiceAccount),
-		Image:              envOrDefault("SCALER_WORKER_EXECUTOR_IMAGE", defaultWorkerExecutorImage),
-		CreateCommand:      strings.TrimSpace(os.Getenv("SCALER_WORKER_CREATE_COMMAND")),
-		DeleteCommand:      strings.TrimSpace(os.Getenv("SCALER_WORKER_DELETE_COMMAND")),
-		LoadBalancerID:     strings.TrimSpace(os.Getenv("SCALER_WORKER_LOAD_BALANCER_ID")),
-		NodeNamePrefix:     envOrDefault("SCALER_WORKER_NODE_NAME_PREFIX", "k3s-worker"),
-		ConfigMapName:      envOrDefault("SCALER_WORKER_EXECUTOR_CONFIG_MAP_NAME", defaultWorkerExecutorConfigMapName),
-		SecretName:         envOrDefault("SCALER_WORKER_EXECUTOR_SECRET_NAME", defaultWorkerExecutorSecretName),
-		SecretMountPath:    envOrDefault("SCALER_WORKER_EXECUTOR_SECRET_MOUNT_PATH", defaultWorkerExecutorSecretMount),
-		TTLSecondsAfterRun: envOrDefaultInt32("SCALER_WORKER_EXECUTOR_TTL_SECONDS", defaultWorkerExecutorTTLSeconds),
+		Namespace:              envOrDefault("SCALER_WORKER_EXECUTOR_NAMESPACE", defaultWorkerExecutorNamespace),
+		ServiceAccountName:     envOrDefault("SCALER_WORKER_EXECUTOR_SERVICE_ACCOUNT", defaultWorkerExecutorServiceAccount),
+		Image:                  envOrDefault("SCALER_WORKER_EXECUTOR_IMAGE", defaultWorkerExecutorImage),
+		CreateCommand:          strings.TrimSpace(os.Getenv("SCALER_WORKER_CREATE_COMMAND")),
+		DeleteCommand:          strings.TrimSpace(os.Getenv("SCALER_WORKER_DELETE_COMMAND")),
+		NodeNamePrefix:         envOrDefault("SCALER_WORKER_NODE_NAME_PREFIX", "k3s-worker"),
+		ConfigMapName:          envOrDefault("SCALER_WORKER_EXECUTOR_CONFIG_MAP_NAME", defaultWorkerExecutorConfigMapName),
+		SecretName:             envOrDefault("SCALER_WORKER_EXECUTOR_SECRET_NAME", defaultWorkerExecutorSecretName),
+		SecretMountPath:        envOrDefault("SCALER_WORKER_EXECUTOR_SECRET_MOUNT_PATH", defaultWorkerExecutorSecretMount),
+		TTLSecondsAfterRun:     envOrDefaultInt32("SCALER_WORKER_EXECUTOR_TTL_SECONDS", defaultWorkerExecutorTTLSeconds),
+		ObservationTimeout:     time.Duration(envOrDefaultInt32("SCALER_WORKER_OBSERVATION_TIMEOUT_SECONDS", int32(defaultWorkerObservationTimeout/time.Second))) * time.Second,
+		MaxConcurrentCreateOps: normalizePositiveInt32(envOrDefaultInt32("SCALER_WORKER_MAX_CONCURRENT_CREATE_OPS", 1), 1),
+		MaxConcurrentDeleteOps: normalizePositiveInt32(envOrDefaultInt32("SCALER_WORKER_MAX_CONCURRENT_DELETE_OPS", 1), 1),
 	}
 }
 
@@ -82,60 +141,129 @@ func (r *CustomScalerReconciler) reconcileWorkerExecutor(
 		return nil
 	}
 
-	active := plan.Status.ActiveOperation
-	if active != nil {
-		return r.reconcileActiveWorkerOperation(ctx, customScaler, plan, active, now)
+	if err := r.reconcileActiveWorkerOperations(ctx, customScaler, plan, now); err != nil {
+		return err
 	}
 
 	switch {
 	case plan.WorkersToCreate > 0:
-		return r.startWorkerOperation(ctx, customScaler, plan, workerOperationCreate, now)
+		return r.startWorkerOperations(ctx, customScaler, plan, workerOperationCreate, plan.WorkersToCreate, now)
 	case plan.WorkersToDelete > 0:
-		return r.startWorkerOperation(ctx, customScaler, plan, workerOperationDelete, now)
+		return r.startWorkerOperations(ctx, customScaler, plan, workerOperationDelete, plan.WorkersToDelete, now)
 	default:
 		return nil
 	}
 }
 
-func (r *CustomScalerReconciler) reconcileActiveWorkerOperation(
+func (r *CustomScalerReconciler) reconcileActiveWorkerOperations(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	plan *workerPrototypePlan,
-	active *autoscalingv1.WorkerOperationStatus,
 	now time.Time,
 ) error {
-	var job batchv1.Job
-	if err := r.Get(ctx, types.NamespacedName{Namespace: active.JobNamespace, Name: active.JobName}, &job); err != nil {
-		if apierrors.IsNotFound(err) {
-			rollbackWorkerOperation(plan, active)
-			plan.Status.LastAction = "executor-missing-job"
-			plan.Status.LastReason = fmt.Sprintf("job %s/%s was not found", active.JobNamespace, active.JobName)
-			plan.Status.ActiveOperation = nil
+	operations := cloneActiveOperations(&plan.Status)
+	if len(operations) == 0 {
+		syncLegacyActiveOperation(&plan.Status)
+		return nil
+	}
+
+	previousObservedReady := int32(0)
+	if customScaler.Status.WorkerPrototype != nil {
+		previousObservedReady = customScaler.Status.WorkerPrototype.ObservedReadyWorkerCount
+	}
+
+	createObservationBudget := maxInt32(plan.Status.ObservedReadyWorkerCount-previousObservedReady, 0)
+	deleteObservationBudget := maxInt32(previousObservedReady-plan.Status.ObservedReadyWorkerCount, 0)
+
+	remainingOperations := make([]autoscalingv1.WorkerOperationStatus, 0, len(operations))
+	for index := range operations {
+		active := operations[index]
+		var job batchv1.Job
+		if err := r.Get(ctx, types.NamespacedName{Namespace: active.JobNamespace, Name: active.JobName}, &job); err != nil {
+			if apierrors.IsNotFound(err) {
+				rollbackWorkerOperation(plan, &active)
+				plan.Status.LastAction = "executor-missing-job"
+				plan.Status.LastReason = fmt.Sprintf("job %s/%s was not found", active.JobNamespace, active.JobName)
+				continue
+			}
+			return err
+		}
+
+		switch {
+		case isJobFailed(&job):
+			rollbackWorkerOperation(plan, &active)
+			plan.Status.LastAction = "executor-job-failed"
+			plan.Status.LastReason = fmt.Sprintf("job %s/%s failed", active.JobNamespace, active.JobName)
+			continue
+		case isJobSucceeded(&job) && active.Phase == workerOperationPhaseRunning:
+			finishedAt := metav1.NewTime(now)
+			active.Phase = workerOperationPhaseWaitObservation
+			active.CommandFinishedAt = &finishedAt
+			active.Message = "command completed; waiting for worker observation"
+		}
+
+		if active.Phase == workerOperationPhaseWaitObservation {
+			switch active.OperationType {
+			case workerOperationCreate:
+				if createObservationBudget > 0 {
+					createObservationBudget -= activeOperationRequestedCount(active)
+					plan.Status.LastAction = "executor-observed"
+					plan.Status.LastReason = fmt.Sprintf("%s operation reflected in observed worker count", active.OperationType)
+					continue
+				}
+			case workerOperationDelete:
+				if deleteObservationBudget > 0 {
+					deleteObservationBudget -= activeOperationRequestedCount(active)
+					plan.Status.LastAction = "executor-observed"
+					plan.Status.LastReason = fmt.Sprintf("%s operation reflected in observed worker count", active.OperationType)
+					continue
+				}
+			}
+		}
+
+		if active.Phase == workerOperationPhaseWaitObservation && workerOperationTimedOut(&active, now, r.WorkerExecutor.ObservationTimeout) {
+			rollbackWorkerOperation(plan, &active)
+			plan.Status.LastAction = "executor-observation-timeout"
+			plan.Status.LastReason = fmt.Sprintf("%s operation for node %s timed out waiting for worker observation", active.OperationType, active.TargetNodeName)
+			continue
+		}
+
+		remainingOperations = append(remainingOperations, active)
+	}
+
+	plan.Status.ActiveOperations = remainingOperations
+	syncLegacyActiveOperation(&plan.Status)
+	return nil
+}
+
+func (r *CustomScalerReconciler) startWorkerOperations(
+	ctx context.Context,
+	customScaler *autoscalingv1.CustomScaler,
+	plan *workerPrototypePlan,
+	operationType string,
+	requestedCount int32,
+	now time.Time,
+) error {
+	startedCount := int32(0)
+	for startedCount < requestedCount {
+		if err := r.startWorkerOperation(ctx, customScaler, plan, operationType, now); err != nil {
+			if startedCount == 0 {
+				return err
+			}
+			rollbackUnstartedWorkerOperations(plan, operationType, requestedCount-startedCount)
+			plan.Status.LastAction = "executor-partial-start"
+			plan.Status.LastReason = fmt.Sprintf("started %d/%d %s jobs; last error: %v", startedCount, requestedCount, operationType, err)
+			syncLegacyActiveOperation(&plan.Status)
 			return nil
 		}
-		return err
+		startedCount++
 	}
 
-	switch {
-	case isJobFailed(&job):
-		rollbackWorkerOperation(plan, active)
-		plan.Status.LastAction = "executor-job-failed"
-		plan.Status.LastReason = fmt.Sprintf("job %s/%s failed", active.JobNamespace, active.JobName)
-		plan.Status.ActiveOperation = nil
-		return nil
-	case isJobSucceeded(&job) && active.Phase == workerOperationPhaseRunning:
-		finishedAt := metav1.NewTime(now)
-		active.Phase = workerOperationPhaseWaitObservation
-		active.CommandFinishedAt = &finishedAt
-		active.Message = "command completed; waiting for worker observation"
+	if startedCount > 1 {
+		plan.Status.LastAction = "executor-started"
+		plan.Status.LastReason = fmt.Sprintf("%s jobs started: %d", operationType, startedCount)
 	}
-
-	if active.Phase == workerOperationPhaseWaitObservation && workerObservationSatisfied(customScaler.Status.WorkerPrototype, &plan.Status, active.OperationType) {
-		plan.Status.LastAction = "executor-observed"
-		plan.Status.LastReason = fmt.Sprintf("%s operation reflected in observed worker count", active.OperationType)
-		plan.Status.ActiveOperation = nil
-	}
-
+	syncLegacyActiveOperation(&plan.Status)
 	return nil
 }
 
@@ -147,11 +275,11 @@ func (r *CustomScalerReconciler) startWorkerOperation(
 	now time.Time,
 ) error {
 	if !r.WorkerExecutor.enabledFor(operationType) {
-		if operationType == workerOperationCreate && plan.WorkersToCreate > 0 && plan.Status.PendingCreateCount >= plan.WorkersToCreate {
-			plan.Status.PendingCreateCount -= plan.WorkersToCreate
+		if operationType == workerOperationCreate && plan.Status.PendingCreateCount > 0 {
+			plan.Status.PendingCreateCount--
 		}
-		if operationType == workerOperationDelete && plan.WorkersToDelete > 0 && plan.Status.PendingDeleteCount >= plan.WorkersToDelete {
-			plan.Status.PendingDeleteCount -= plan.WorkersToDelete
+		if operationType == workerOperationDelete && plan.Status.PendingDeleteCount > 0 {
+			plan.Status.PendingDeleteCount--
 		}
 		plan.Status.EffectiveWorkerCount = plan.Status.ObservedReadyWorkerCount + plan.Status.PendingCreateCount - plan.Status.PendingDeleteCount
 		plan.Status.LastAction = "executor-disabled"
@@ -159,25 +287,80 @@ func (r *CustomScalerReconciler) startWorkerOperation(
 		return nil
 	}
 
-	job := buildWorkerOperationJob(customScaler, &plan.Status, operationType, r.WorkerExecutor, now)
+	execution, err := r.prepareWorkerOperationExecution(ctx, customScaler, operationType, now)
+	if err != nil {
+		return err
+	}
+	if execution == nil {
+		switch operationType {
+		case workerOperationDelete:
+			if plan.Status.PendingDeleteCount > 0 {
+				plan.Status.PendingDeleteCount--
+			}
+		case workerOperationCreate:
+			if plan.Status.PendingCreateCount > 0 {
+				plan.Status.PendingCreateCount--
+			}
+		}
+		plan.Status.EffectiveWorkerCount = plan.Status.ObservedReadyWorkerCount + plan.Status.PendingCreateCount - plan.Status.PendingDeleteCount
+		plan.Status.LastAction = "executor-no-target"
+		plan.Status.LastReason = fmt.Sprintf("no target node available for %s operation", operationType)
+		return nil
+	}
+
+	job := buildWorkerOperationJob(customScaler, &plan.Status, operationType, r.WorkerExecutor, *execution, now)
 	if err := r.Create(ctx, &job); err != nil {
 		return err
 	}
 
 	startedAt := metav1.NewTime(now)
-	plan.Status.ActiveOperation = &autoscalingv1.WorkerOperationStatus{
+	plan.Status.ActiveOperations = append(plan.Status.ActiveOperations, autoscalingv1.WorkerOperationStatus{
 		OperationType:  operationType,
+		TargetNodeName: execution.TargetNodeName,
 		Phase:          workerOperationPhaseRunning,
 		JobNamespace:   job.Namespace,
 		JobName:        job.Name,
 		RequestedCount: 1,
 		Message:        "executor job created",
 		StartedAt:      &startedAt,
-	}
+	})
+	syncLegacyActiveOperation(&plan.Status)
 	plan.Status.LastAction = "executor-started"
-	plan.Status.LastReason = fmt.Sprintf("%s job %s/%s created", operationType, job.Namespace, job.Name)
+	plan.Status.LastReason = fmt.Sprintf("%s job %s/%s created for node %s", operationType, job.Namespace, job.Name, execution.TargetNodeName)
 
 	return nil
+}
+
+func (r *CustomScalerReconciler) prepareWorkerOperationExecution(
+	ctx context.Context,
+	customScaler *autoscalingv1.CustomScaler,
+	operationType string,
+	now time.Time,
+) (*workerOperationExecution, error) {
+	baseCommand := r.WorkerExecutor.CreateCommand
+	switch operationType {
+	case workerOperationCreate:
+		targetNodeName := generateWorkerNodeName(r.WorkerExecutor.NodeNamePrefix, customScaler.Name, now)
+		return &workerOperationExecution{
+			Command:        buildWorkerOperationCommand(baseCommand, targetNodeName),
+			TargetNodeName: targetNodeName,
+		}, nil
+	case workerOperationDelete:
+		baseCommand = r.WorkerExecutor.DeleteCommand
+		targetNodeName, err := r.selectWorkerNodeForDeletion(ctx, customScaler.Spec.WorkerPrototype)
+		if err != nil {
+			return nil, err
+		}
+		if targetNodeName == "" {
+			return nil, nil
+		}
+		return &workerOperationExecution{
+			Command:        buildWorkerOperationCommand(baseCommand, targetNodeName),
+			TargetNodeName: targetNodeName,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported worker operation type: %s", operationType)
+	}
 }
 
 func buildWorkerOperationJob(
@@ -185,13 +368,9 @@ func buildWorkerOperationJob(
 	status *autoscalingv1.WorkerPrototypeStatus,
 	operationType string,
 	config WorkerExecutorConfig,
+	execution workerOperationExecution,
 	now time.Time,
 ) batchv1.Job {
-	command := config.CreateCommand
-	if operationType == workerOperationDelete {
-		command = config.DeleteCommand
-	}
-
 	backoffLimit := int32(0)
 	sshSecretDefaultMode := int32(0o400)
 	namePrefix := fmt.Sprintf("%s-worker-%s-", customScaler.Name, operationType)
@@ -200,18 +379,18 @@ func buildWorkerOperationJob(
 	container := corev1.Container{
 		Name:    "executor",
 		Image:   config.Image,
-		Command: []string{"/bin/sh", "-c", command},
+		Command: []string{"/bin/sh", "-c", execution.Command},
 		Env: []corev1.EnvVar{
 			{Name: "SCALER_NAME", Value: customScaler.Name},
 			{Name: "SCALER_NAMESPACE", Value: customScaler.Namespace},
 			{Name: "WORKER_OPERATION_TYPE", Value: operationType},
+			{Name: "WORKER_TARGET_NODE_NAME", Value: execution.TargetNodeName},
 			{Name: "WORKER_TARGET_COUNT", Value: fmt.Sprintf("%d", status.TargetWorkerCount)},
 			{Name: "WORKER_OBSERVED_READY_COUNT", Value: fmt.Sprintf("%d", status.ObservedReadyWorkerCount)},
 			{Name: "WORKER_PENDING_CREATE_COUNT", Value: fmt.Sprintf("%d", status.PendingCreateCount)},
 			{Name: "WORKER_PENDING_DELETE_COUNT", Value: fmt.Sprintf("%d", status.PendingDeleteCount)},
 			{Name: "WORKER_EFFECTIVE_COUNT", Value: fmt.Sprintf("%d", status.EffectiveWorkerCount)},
 			{Name: "WORKER_ENSURE_TIME", Value: now.UTC().Format(time.RFC3339)},
-			{Name: "SCALER_WORKER_LOAD_BALANCER_ID", Value: config.LoadBalancerID},
 			{Name: "SCALER_WORKER_NODE_NAME_PREFIX", Value: config.NodeNamePrefix},
 		},
 	}
@@ -257,6 +436,8 @@ func buildWorkerOperationJob(
 		RestartPolicy:      corev1.RestartPolicyNever,
 		ServiceAccountName: config.ServiceAccountName,
 		Containers:         []corev1.Container{container},
+		Affinity:           controlPlaneAffinity(),
+		Tolerations:        controlPlaneTolerations(),
 	}
 
 	if config.SecretName != "" {
@@ -296,25 +477,198 @@ func buildWorkerOperationJob(
 					ServiceAccountName: podSpec.ServiceAccountName,
 					Containers:         podSpec.Containers,
 					Volumes:            podSpec.Volumes,
+					Affinity:           podSpec.Affinity,
+					Tolerations:        podSpec.Tolerations,
 				},
 			},
 		},
 	}
 }
 
+func (r *CustomScalerReconciler) selectWorkerNodeForDeletion(
+	ctx context.Context,
+	spec *autoscalingv1.WorkerPrototypeSpec,
+) (string, error) {
+	nodes, err := r.listManagedWorkerNodes(ctx, spec)
+	if err != nil {
+		return "", err
+	}
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList); err != nil {
+		return "", err
+	}
+
+	return chooseWorkerNodeForDeletion(nodes, podList.Items), nil
+}
+
+func chooseWorkerNodeForDeletion(nodes []corev1.Node, pods []corev1.Pod) string {
+	type candidate struct {
+		NodeName         string
+		CreationUnixNano int64
+		PodCount         int
+	}
+
+	candidates := make([]candidate, 0, len(nodes))
+	nodeNames := map[string]struct{}{}
+	for _, node := range nodes {
+		if !isNodeReady(&node) {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			NodeName:         node.Name,
+			CreationUnixNano: node.CreationTimestamp.Time.UnixNano(),
+		})
+		nodeNames[node.Name] = struct{}{}
+	}
+
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	podCounts := map[string]int{}
+	for _, pod := range pods {
+		nodeName := pod.Spec.NodeName
+		if nodeName == "" {
+			continue
+		}
+		if _, exists := nodeNames[nodeName]; !exists {
+			continue
+		}
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		if isDaemonSetManagedPod(&pod) {
+			continue
+		}
+		podCounts[nodeName]++
+	}
+
+	for i := range candidates {
+		candidates[i].PodCount = podCounts[candidates[i].NodeName]
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].PodCount != candidates[j].PodCount {
+			return candidates[i].PodCount < candidates[j].PodCount
+		}
+		if candidates[i].CreationUnixNano != candidates[j].CreationUnixNano {
+			return candidates[i].CreationUnixNano > candidates[j].CreationUnixNano
+		}
+		return candidates[i].NodeName < candidates[j].NodeName
+	})
+
+	return candidates[0].NodeName
+}
+
+func isDaemonSetManagedPod(pod *corev1.Pod) bool {
+	for _, ownerRef := range pod.OwnerReferences {
+		if ownerRef.Kind == "DaemonSet" && ownerRef.Controller != nil && *ownerRef.Controller {
+			return true
+		}
+	}
+
+	return false
+}
+
+func buildWorkerOperationCommand(baseCommand, targetNodeName string) string {
+	baseCommand = strings.TrimSpace(baseCommand)
+	if targetNodeName == "" {
+		return baseCommand
+	}
+
+	return fmt.Sprintf("%s %s", baseCommand, shellQuote(targetNodeName))
+}
+
+func generateWorkerNodeName(prefix, scalerName string, now time.Time) string {
+	sanitizedPrefix := sanitizeNameComponent(prefix)
+	if sanitizedPrefix == "" {
+		sanitizedPrefix = "k3s-worker"
+	}
+
+	sanitizedScalerName := sanitizeNameComponent(scalerName)
+	if sanitizedScalerName == "" {
+		sanitizedScalerName = "scaler"
+	}
+
+	return sanitizeJobName(fmt.Sprintf("%s-%s-%d-%s", sanitizedPrefix, sanitizedScalerName, now.UTC().Unix(), rand.String(4)))
+}
+
+func sanitizeNameComponent(value string) string {
+	var builder strings.Builder
+	lower := strings.ToLower(strings.TrimSpace(value))
+	lastWasDash := false
+
+	for _, r := range lower {
+		isAlphaNum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAlphaNum {
+			builder.WriteRune(r)
+			lastWasDash = false
+			continue
+		}
+		if !lastWasDash {
+			builder.WriteByte('-')
+			lastWasDash = true
+		}
+	}
+
+	return strings.Trim(builder.String(), "-")
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
 func rollbackWorkerOperation(plan *workerPrototypePlan, active *autoscalingv1.WorkerOperationStatus) {
-	switch active.OperationType {
+	rollbackUnstartedWorkerOperations(plan, active.OperationType, activeOperationRequestedCount(*active))
+}
+
+func rollbackUnstartedWorkerOperations(plan *workerPrototypePlan, operationType string, count int32) {
+	if count <= 0 {
+		return
+	}
+
+	switch operationType {
 	case workerOperationCreate:
-		if plan.Status.PendingCreateCount > 0 {
-			plan.Status.PendingCreateCount--
+		rollbackCount := minInt32(plan.Status.PendingCreateCount, count)
+		if rollbackCount > 0 {
+			plan.Status.PendingCreateCount -= rollbackCount
 		}
 	case workerOperationDelete:
-		if plan.Status.PendingDeleteCount > 0 {
-			plan.Status.PendingDeleteCount--
+		rollbackCount := minInt32(plan.Status.PendingDeleteCount, count)
+		if rollbackCount > 0 {
+			plan.Status.PendingDeleteCount -= rollbackCount
 		}
 	}
 
 	plan.Status.EffectiveWorkerCount = plan.Status.ObservedReadyWorkerCount + plan.Status.PendingCreateCount - plan.Status.PendingDeleteCount
+}
+
+func workerOperationTimedOut(
+	active *autoscalingv1.WorkerOperationStatus,
+	now time.Time,
+	timeout time.Duration,
+) bool {
+	if active == nil || timeout <= 0 {
+		return false
+	}
+
+	reference := active.CommandFinishedAt
+	if reference == nil {
+		reference = active.StartedAt
+	}
+	if reference == nil {
+		return false
+	}
+
+	return now.Sub(reference.Time) >= timeout
 }
 
 func workerObservationSatisfied(
@@ -388,4 +742,11 @@ func envOrDefaultInt32(name string, defaultValue int32) int32 {
 	}
 
 	return int32(parsed)
+}
+
+func normalizePositiveInt32(value, fallback int32) int32 {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }

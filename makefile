@@ -8,8 +8,17 @@ build-service:
 	docker build -t docker.io/boygioi/frontend-service:latest ./services/frontend
 build-locust: 
 	docker compose build locust
+
 build-custom-load-test:
-	docker compose build custom-load-test
+	CUSTOM_LOAD_TEST_IMAGE="$(TAG)" docker compose build custom-load-test
+push-custom-load-test:
+	docker push docker.io/boygioi/$(TAG)
+build-push-custom-load-test: 
+	CUSTOM_LOAD_TEST_IMAGE="$(TAG)" docker compose build custom-load-test
+	docker push docker.io/boygioi/$(TAG)
+pull-custom-load-test: 
+	docker pull docker.io/boygioi/$(TAG)
+
 build-forecasting-service: 
 	docker build -t docker.io/boygioi/forecasting-service:latest ./forecasting-service
 build-custom-scaler: 
@@ -78,18 +87,24 @@ restart-service:
 install-helm-monitor: 
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 	helm repo update
-	kubectl create namespace monitoring
-	helm upgrade --install monitoring-stack prometheus-community/kube-prometheus-stack -n monitoring
+	kubectl get namespace monitoring >/dev/null 2>&1 || kubectl create namespace monitoring
+	helm upgrade --install monitoring-stack prometheus-community/kube-prometheus-stack \
+		-n monitoring \
+		--wait \
+		--debug \
+		--timeout 15m \
+		-f k8s/monitoring-values.yaml
 install-helm-ingress: 
-	helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-	helm repo update
-	helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
-	--namespace ingress-nginx \
+	helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
+	-n ingress-nginx \
+	--reuse-values \
+	--set controller.extraArgs.metrics-per-host=true \
+	--set controller.extraArgs.metrics-per-undefined-host=true \
 	--create-namespace \
 	--set controller.metrics.enabled=true \
 	--set controller.metrics.serviceMonitor.enabled=true \
-	--set controller.metrics.serviceMonitor.additionalLabels.release="monitoring-stack"
-
+	--set controller.metrics.serviceMonitor.additionalLabels.release="monitoring-stack" \
+	--debug
 # # This ensures metrics, the ServiceMonitor for Prometheus, and stub-status are all ON
 # helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
 #   -n ingress-nginx \

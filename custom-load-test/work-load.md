@@ -80,7 +80,17 @@ The result is a canonical list of:
 
 - `PRIME_USER_WEIGHT`
 - `TEXT_USER_WEIGHT`
+- `PRIME_RANGE_WEIGHT`
+- `PRIME_KTH_WEIGHT`
+- `PRIME_CHECK_WEIGHT`
+- `DISTRIBUTION_MODE`
 - `SCRIPT_RANDOM_SEED`
+
+If endpoint-specific weights are set, they override the old equal-per-request behavior inside a user group. If they are omitted, the planner falls back to the group weight so older env files still behave the same.
+For prime requests, `DISTRIBUTION_MODE` can now be `EQUAL`, `UNIFORM`, or `NORMAL`.
+In `EQUAL` mode, the planner uses `PRIME_RANGE`, `PRIME_KTH`, and `PRIME_CHECK`.
+In `UNIFORM` mode, it uses each endpoint's `*_MIN` and `*_MAX`.
+In `NORMAL` mode, it uses each endpoint's `*_MIN`, `*_MAX`, `*_MEAN`, and `*_STANDARD`, and validates that the mean stays inside the configured bounds.
 
 Each scheduled request is mapped to a request shape using:
 
@@ -567,6 +577,8 @@ The Docker service and env file are:
 
 - [Dockerfile](/home/boygioi15/predictive-autoscaling-k8s-test/custom-load-test/Dockerfile)
 - [custom_load_test.env](/home/boygioi15/predictive-autoscaling-k8s-test/custom-load-test/custom_load_test.env)
+
+The request script is packaged into the image at `/app/scripts/test_script.csv`, and runtime reports are written under `/app/output`.
 
 From repo root:
 

@@ -203,6 +203,13 @@ func (in *WorkerPrototypeStatus) DeepCopyInto(out *WorkerPrototypeStatus) {
 		in, out := &in.LastEnsureTime, &out.LastEnsureTime
 		*out = (*in).DeepCopy()
 	}
+	if in.ActiveOperations != nil {
+		in, out := &in.ActiveOperations, &out.ActiveOperations
+		*out = make([]WorkerOperationStatus, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.ActiveOperation != nil {
 		in, out := &in.ActiveOperation, &out.ActiveOperation
 		*out = new(WorkerOperationStatus)

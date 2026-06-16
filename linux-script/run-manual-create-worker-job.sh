@@ -5,13 +5,14 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./linux-script/run-manual-create-worker-job.sh <job-name> <load-balancer-id> [node-name]
+  ./linux-script/run-manual-create-worker-job.sh <job-name> [node-name]
 
 Example:
-  ./linux-script/run-manual-create-worker-job.sh manual-create-1 lb-1234 k3s-worker-7
+  ./linux-script/run-manual-create-worker-job.sh manual-create-1 k3s-worker-7
 
 Notes:
   - Assumes the vm-job ConfigMap and Secret already exist.
+  - `VULTR_LOAD_BALANCER_ID` is expected to come from the vm-job ConfigMap.
   - If [node-name] is omitted, the container auto-generates one.
   - Override defaults with env vars if needed:
       VM_JOB_NAMESPACE
@@ -33,7 +34,7 @@ require_command() {
 }
 
 main() {
-  if [[ $# -lt 2 || $# -gt 3 ]]; then
+  if [[ $# -lt 1 || $# -gt 2 ]]; then
     usage
     exit 1
   fi
@@ -41,8 +42,7 @@ main() {
   require_command kubectl
 
   local job_name="$1"
-  local load_balancer_id="$2"
-  local node_name="${3:-}"
+  local node_name="${2:-}"
   local namespace="${VM_JOB_NAMESPACE:-custom-scaler-system}"
   local service_account="${VM_JOB_SERVICE_ACCOUNT:-custom-scaler-controller-manager}"
   local image="${VM_JOB_IMAGE:-docker.io/boygioi/vm-job:latest}"
@@ -82,8 +82,6 @@ spec:
           value: ${job_name}
         - name: SCALER_NAMESPACE
           value: ${namespace}
-        - name: SCALER_WORKER_LOAD_BALANCER_ID
-          value: ${load_balancer_id}
         - name: SCALER_WORKER_NODE_NAME_PREFIX
           value: ${node_name_prefix}
         - name: VULTR_API_KEY
@@ -133,8 +131,6 @@ spec:
           value: ${job_name}
         - name: SCALER_NAMESPACE
           value: ${namespace}
-        - name: SCALER_WORKER_LOAD_BALANCER_ID
-          value: ${load_balancer_id}
         - name: SCALER_WORKER_NODE_NAME_PREFIX
           value: ${node_name_prefix}
         - name: VULTR_API_KEY

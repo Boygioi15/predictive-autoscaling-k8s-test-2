@@ -30,8 +30,8 @@ spec:
           
           resources:
             limits:
-              cpu: "600m"      # This forces: 40000 100000
+              cpu: "500m"      # This forces: 40000 100000
               memory: "128Mi"  # Protects your Nitro from RAM leaks
             requests:
-              cpu: "300m"      # Ensures the pod gets its fair share
+              cpu: "400m"      # Ensures the pod gets its fair share
               memory: "128Mi"

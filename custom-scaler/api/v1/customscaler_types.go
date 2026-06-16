@@ -49,7 +49,9 @@ type CustomScalerSpec struct {
 }
 
 type WorkerPrototypeSpec struct {
-	// Desired number of worker nodes the prototype should converge toward.
+	// Optional manual override for the desired worker-node count.
+	// When omitted, the controller computes it from desired replicas, safety pods,
+	// unschedulable pods, node allocatable CPU, and app pod request CPU.
 	TargetWorkerCount *int32 `json:"targetWorkerCount,omitempty"`
 	// Maximum number of worker operations to enqueue in a single reconcile.
 	MaxBatchSize *int32 `json:"maxBatchSize,omitempty"`
@@ -68,6 +70,10 @@ type CustomScalerStatus struct {
 	LastDesiredReplicas int32 `json:"lastDesiredReplicas"`
 	// Current replica count
 	CurrentReplicas int32 `json:"currentReplicas"`
+	// Stateful ingress pressure level used to accumulate emergency scaling under sustained saturation.
+	IngressPressureBump int32 `json:"ingressPressureBump,omitempty"`
+	// Human-readable reason for the latest ingress pressure bump transition.
+	IngressPressureReason string `json:"ingressPressureReason,omitempty"`
 	// Durable worker-planning state for the prototype node scaler.
 	WorkerPrototype *WorkerPrototypeStatus `json:"workerPrototype,omitempty"`
 }
@@ -89,13 +95,19 @@ type WorkerPrototypeStatus struct {
 	LastReason string `json:"lastReason,omitempty"`
 	// Last time the prototype worker planner ran.
 	LastEnsureTime *metav1.Time `json:"lastEnsureTime,omitempty"`
-	// Optional single in-flight worker operation managed by the prototype executor.
+	// In-flight worker operations managed by the prototype executor.
+	ActiveOperations []WorkerOperationStatus `json:"activeOperations,omitempty"`
+	// Legacy single-operation mirror kept for backwards-compatible status transitions.
+	// New logic should use ActiveOperations.
 	ActiveOperation *WorkerOperationStatus `json:"activeOperation,omitempty"`
 }
 
 type WorkerOperationStatus struct {
 	// Type of worker operation: create or delete.
 	OperationType string `json:"operationType,omitempty"`
+	// Concrete node name passed to the executor. For create, this is the planned new node name.
+	// For delete, this is the node selected for eviction and teardown.
+	TargetNodeName string `json:"targetNodeName,omitempty"`
 	// Current executor phase: Running or WaitingForObservation.
 	Phase string `json:"phase,omitempty"`
 	// Namespace of the Kubernetes Job executing the operation.

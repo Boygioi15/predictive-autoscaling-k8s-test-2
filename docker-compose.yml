@@ -40,10 +40,11 @@ services:
       context: ./custom-load-test
       dockerfile: Dockerfile
     container_name: custom-load-test
+    image:  docker.io/boygioi/${CUSTOM_LOAD_TEST_IMAGE:-custom-load-test:latest}
     env_file:
       - ./custom-load-test/custom_load_test.env
     volumes:
-      - ./shares:/mnt/shares
+      - custom_load_test_output:/app/output
 
   prometheus:
     image: prom/prometheus:latest
@@ -79,3 +80,4 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
+  custom_load_test_output:

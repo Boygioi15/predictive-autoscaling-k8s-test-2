@@ -99,6 +99,29 @@ raise SystemExit(f"No Vultr instance found with public IP: {target_public_ip}")
 ' "$TARGET_PUBLIC_IP"
 }
 
+wait_for_instance_resolution() {
+  local deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+  local attempt=1
+  local instances_response
+
+  while (( SECONDS < deadline )); do
+    instances_response="$(api_call GET "/instances?per_page=500")"
+    if TARGET_INSTANCE_ID="$(printf '%s' "${instances_response}" | parse_instance_id_by_public_ip 2>/dev/null)"; then
+      RESOLVED_INSTANCES_RESPONSE="${instances_response}"
+      return 0
+    fi
+
+    echo "  Instance for public IP ${TARGET_PUBLIC_IP} is not visible yet (attempt ${attempt}), retrying in ${WAIT_INTERVAL_SECONDS}s..."
+    attempt=$((attempt + 1))
+    sleep "${WAIT_INTERVAL_SECONDS}"
+  done
+
+  echo "Timed out waiting for Vultr instance with public IP ${TARGET_PUBLIC_IP} to appear in the instance list." >&2
+  instances_response="$(api_call GET "/instances?per_page=500")"
+  TARGET_INSTANCE_ID="$(printf '%s' "${instances_response}" | parse_instance_id_by_public_ip)"
+  RESOLVED_INSTANCES_RESPONSE="${instances_response}"
+}
+
 parse_instance_summary() {
   python3 -c '
 import json
@@ -229,8 +252,9 @@ main() {
   local current_lb_instances
 
   echo "Resolving Vultr instance for public IP ${TARGET_PUBLIC_IP}..."
-  instances_response="$(api_call GET "/instances?per_page=500")"
-  TARGET_INSTANCE_ID="$(printf '%s' "${instances_response}" | parse_instance_id_by_public_ip)"
+  RESOLVED_INSTANCES_RESPONSE=""
+  wait_for_instance_resolution
+  instances_response="${RESOLVED_INSTANCES_RESPONSE}"
 
   mapfile -t instance_summary < <(printf '%s' "${instances_response}" | parse_instance_summary)
   local instance_label="${instance_summary[0]}"

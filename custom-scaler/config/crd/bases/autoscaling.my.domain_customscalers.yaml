@@ -93,8 +93,10 @@ spec:
                     description: Optional node label value used together with NodeLabelKey.
                     type: string
                   targetWorkerCount:
-                    description: Desired number of worker nodes the prototype should
-                      converge toward.
+                    description: |-
+                      Optional manual override for the desired worker-node count.
+                      When omitted, the controller computes it from desired replicas, safety pods,
+                      unschedulable pods, node allocatable CPU, and app pod request CPU.
                     format: int32
                     type: integer
                 type: object
@@ -109,6 +111,15 @@ spec:
                 description: Current replica count
                 format: int32
                 type: integer
+              ingressPressureBump:
+                description: Stateful ingress pressure level used to accumulate emergency
+                  scaling under sustained saturation.
+                format: int32
+                type: integer
+              ingressPressureReason:
+                description: Human-readable reason for the latest ingress pressure
+                  bump transition.
+                type: string
               lastDesiredReplicas:
                 description: The latest desired replica count computed by the operator.
                 format: int32
@@ -125,8 +136,9 @@ spec:
                   scaler.
                 properties:
                   activeOperation:
-                    description: Optional single in-flight worker operation managed
-                      by the prototype executor.
+                    description: |-
+                      Legacy single-operation mirror kept for backwards-compatible status transitions.
+                      New logic should use ActiveOperations.
                     properties:
                       commandFinishedAt:
                         description: When the executor observed the command job complete.
@@ -157,7 +169,54 @@ spec:
                         description: When the executor started the operation.
                         format: date-time
                         type: string
+                      targetNodeName:
+                        description: |-
+                          Concrete node name passed to the executor. For create, this is the planned new node name.
+                          For delete, this is the node selected for eviction and teardown.
+                        type: string
                     type: object
+                  activeOperations:
+                    description: In-flight worker operations managed by the prototype
+                      executor.
+                    items:
+                      properties:
+                        commandFinishedAt:
+                          description: When the executor observed the command job
+                            complete.
+                          format: date-time
+                          type: string
+                        jobName:
+                          description: Name of the Kubernetes Job executing the operation.
+                          type: string
+                        jobNamespace:
+                          description: Namespace of the Kubernetes Job executing the
+                            operation.
+                          type: string
+                        message:
+                          description: Last executor message for humans.
+                          type: string
+                        operationType:
+                          description: 'Type of worker operation: create or delete.'
+                          type: string
+                        phase:
+                          description: 'Current executor phase: Running or WaitingForObservation.'
+                          type: string
+                        requestedCount:
+                          description: Number of workers requested by this operation.
+                            The prototype uses 1.
+                          format: int32
+                          type: integer
+                        startedAt:
+                          description: When the executor started the operation.
+                          format: date-time
+                          type: string
+                        targetNodeName:
+                          description: |-
+                            Concrete node name passed to the executor. For create, this is the planned new node name.
+                            For delete, this is the node selected for eviction and teardown.
+                          type: string
+                      type: object
+                    type: array
                   effectiveWorkerCount:
                     description: Effective worker count used by ensure_worker = ready
                       + pendingCreate - pendingDelete.

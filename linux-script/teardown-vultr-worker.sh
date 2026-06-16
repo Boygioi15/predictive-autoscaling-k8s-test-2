@@ -6,11 +6,11 @@ usage() {
   cat <<'EOF'
 Usage:
   VULTR_API_KEY=... \
-  ./linux-script/teardown-vultr-worker.sh <k8s-node-name> <load-balancer-id> <vm-public-ip>
+  ./linux-script/teardown-vultr-worker.sh <k8s-node-name> <load-balancer-id>
 
 Example:
   VULTR_API_KEY=... \
-  ./linux-script/teardown-vultr-worker.sh worker-5 abcd1234 149.28.132.166
+  ./linux-script/teardown-vultr-worker.sh worker-5 abcd1234
 EOF
 }
 
@@ -28,6 +28,31 @@ require_command() {
     echo "Missing required command: ${name}" >&2
     exit 1
   fi
+}
+
+debug_log_response() {
+  local label="$1"
+  local response="$2"
+
+  if [[ "${DEBUG_VULTR_INSTANCE_LOOKUP:-false}" != "true" ]]; then
+    return
+  fi
+
+  echo "DEBUG ${label} response begin" >&2
+  printf '%s\n' "${response}" >&2
+  echo "DEBUG ${label} response end" >&2
+}
+
+debug_log_instance_match() {
+  if [[ "${DEBUG_VULTR_INSTANCE_LOOKUP:-false}" != "true" ]]; then
+    return
+  fi
+
+  echo "DEBUG parsed instance_match count=${#instance_match[@]}" >&2
+  local idx
+  for idx in "${!instance_match[@]}"; do
+    echo "DEBUG instance_match[${idx}]=${instance_match[$idx]}" >&2
+  done
 }
 
 api_call() {
@@ -81,21 +106,92 @@ api_call() {
   rm -f "${response_file}"
 }
 
-parse_instance_id_by_public_ip() {
+parse_instance_by_node_name() {
   python3 -c '
 import json
 import sys
 
-target_public_ip = sys.argv[1]
+target_node_name = sys.argv[1]
+label_prefix = sys.argv[2]
+hostname_prefix = sys.argv[3]
 data = json.load(sys.stdin)
 
-for instance in data.get("instances", []):
-    if instance.get("main_ip") == target_public_ip:
-        print(instance["id"])
-        sys.exit(0)
+if isinstance(data, dict) and "instances" in data and isinstance(data.get("instances"), list):
+    instances = data.get("instances", [])
+elif isinstance(data, dict):
+    instances = [data]
+elif isinstance(data, list):
+    instances = data
+else:
+    raise SystemExit(f"Unsupported Vultr instance response shape: {type(data).__name__}")
 
-raise SystemExit(f"No Vultr instance found with public IP: {target_public_ip}")
-' "$TARGET_PUBLIC_IP"
+candidates = []
+expected_labels = {target_node_name, f"{label_prefix}{target_node_name}" if label_prefix else target_node_name}
+expected_hostnames = {target_node_name, f"{hostname_prefix}{target_node_name}" if hostname_prefix else target_node_name}
+
+for instance in instances:
+    if not isinstance(instance, dict):
+        continue
+    label = instance.get("label", "")
+    hostname = instance.get("hostname", "")
+    if label in expected_labels or hostname in expected_hostnames:
+        candidates.append(instance)
+
+if not candidates:
+    raise SystemExit(f"No Vultr instance found for node name: {target_node_name}")
+
+if len(candidates) > 1:
+    lines = [f"Multiple Vultr instances matched node name: {target_node_name}"]
+    for instance in candidates:
+        lines.append(
+            "  id={id} label={label} hostname={hostname} public_ip={public_ip}".format(
+                id=instance.get("id"),
+                label=instance.get("label", ""),
+                hostname=instance.get("hostname", ""),
+                public_ip=instance.get("main_ip", ""),
+            )
+        )
+    raise SystemExit("\n".join(lines))
+
+instance = candidates[0]
+print(instance.get("id", ""))
+print(instance.get("label", ""))
+print(instance.get("hostname", ""))
+print(instance.get("main_ip", ""))
+' "$TARGET_NODE_NAME" "${VULTR_LABEL_PREFIX:-}" "${VULTR_HOSTNAME_PREFIX:-}"
+}
+
+wait_for_instance_resolution_by_node_name() {
+  local deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+  local attempt=1
+  local instances_response
+
+  while (( SECONDS < deadline )); do
+    instances_response="$(api_call GET "/instances?per_page=500")"
+    debug_log_response "GET /instances?per_page=500" "${instances_response}"
+    if mapfile -t instance_match < <(printf '%s' "${instances_response}" | parse_instance_by_node_name 2>/dev/null); then
+      debug_log_instance_match
+      if (( ${#instance_match[@]} >= 4 )); then
+        RESOLVED_INSTANCES_RESPONSE="${instances_response}"
+        return 0
+      fi
+    fi
+
+    echo "  Instance for node name ${TARGET_NODE_NAME} is not visible yet (attempt ${attempt}), retrying in ${WAIT_INTERVAL_SECONDS}s..."
+    attempt=$((attempt + 1))
+    sleep "${WAIT_INTERVAL_SECONDS}"
+  done
+
+  echo "Timed out waiting for Vultr instance for node name ${TARGET_NODE_NAME} to appear in the instance list." >&2
+  instances_response="$(api_call GET "/instances?per_page=500")"
+  debug_log_response "GET /instances?per_page=500" "${instances_response}"
+  mapfile -t instance_match < <(printf '%s' "${instances_response}" | parse_instance_by_node_name)
+  debug_log_instance_match
+  if (( ${#instance_match[@]} < 4 )); then
+    echo "Resolved instance data for node name ${TARGET_NODE_NAME} was incomplete." >&2
+    exit 1
+  fi
+  RESOLVED_INSTANCES_RESPONSE="${instances_response}"
 }
 
 instance_exists_in_list() {
@@ -198,41 +294,6 @@ detach_node_from_cluster() {
   kubectl delete node "${node_name}"
 }
 
-get_deployment_replicas() {
-  local namespace="$1"
-  local deployment="$2"
-
-  kubectl get deployment "${deployment}" -n "${namespace}" -o jsonpath='{.spec.replicas}'
-}
-
-scale_down_ingress() {
-  local namespace="$1"
-  local deployment="$2"
-  local decrement="$3"
-  local min_replicas="$4"
-
-  echo "Scaling down ingress deployment ${namespace}/${deployment}..."
-
-  local current_replicas
-  current_replicas="$(get_deployment_replicas "${namespace}" "${deployment}")"
-
-  if [[ -z "${current_replicas}" ]]; then
-    echo "Unable to read current ingress replicas for ${namespace}/${deployment}." >&2
-    exit 1
-  fi
-
-  local desired_replicas=$(( current_replicas - decrement ))
-  if (( desired_replicas < min_replicas )); then
-    desired_replicas="${min_replicas}"
-  fi
-
-  echo "  current-replicas=${current_replicas}"
-  echo "  desired-replicas=${desired_replicas}"
-
-  kubectl scale deployment "${deployment}" -n "${namespace}" --replicas="${desired_replicas}"
-  kubectl rollout status deployment "${deployment}" -n "${namespace}" --timeout="${KUBECTL_ROLLOUT_TIMEOUT}"
-}
-
 detach_vm_from_lb() {
   local lb_response
   local patch_payload
@@ -296,7 +357,7 @@ destroy_instance() {
 }
 
 main() {
-  if [[ $# -ne 3 ]]; then
+  if [[ $# -ne 2 ]]; then
     usage
     exit 1
   fi
@@ -308,40 +369,46 @@ main() {
 
   TARGET_NODE_NAME="$1"
   TARGET_LOAD_BALANCER_ID="$2"
-  TARGET_PUBLIC_IP="$3"
 
   VULTR_API_BASE="${VULTR_API_BASE:-https://api.vultr.com/v2}"
   WAIT_TIMEOUT_SECONDS="${WAIT_TIMEOUT_SECONDS:-300}"
   WAIT_INTERVAL_SECONDS="${WAIT_INTERVAL_SECONDS:-5}"
   KUBECTL_DRAIN_TIMEOUT="${KUBECTL_DRAIN_TIMEOUT:-5m}"
-  KUBECTL_ROLLOUT_TIMEOUT="${KUBECTL_ROLLOUT_TIMEOUT:-180s}"
   KUBECTL_GRACE_PERIOD="${KUBECTL_GRACE_PERIOD:-30}"
-  INGRESS_NAMESPACE="${INGRESS_NAMESPACE:-ingress-nginx}"
-  INGRESS_DEPLOYMENT="${INGRESS_DEPLOYMENT:-ingress-nginx-controller}"
-  INGRESS_REPLICA_DECREMENT="${INGRESS_REPLICA_DECREMENT:-2}"
-  INGRESS_MIN_REPLICAS="${INGRESS_MIN_REPLICAS:-1}"
 
   local instances_response
+  local instance_label
+  local instance_hostname
+  local -a instance_match=()
 
-  echo "Resolving Vultr instance for public IP ${TARGET_PUBLIC_IP}..."
-  instances_response="$(api_call GET "/instances?per_page=500")"
-  TARGET_INSTANCE_ID="$(printf '%s' "${instances_response}" | parse_instance_id_by_public_ip)"
-  echo "Resolved instance-id: ${TARGET_INSTANCE_ID}"
+  echo "Resolving Vultr instance for node name ${TARGET_NODE_NAME}..."
+  wait_for_instance_resolution_by_node_name
+  instances_response="${RESOLVED_INSTANCES_RESPONSE}"
+  if (( ${#instance_match[@]} < 4 )); then
+    echo "Failed to resolve a complete Vultr instance record for node name ${TARGET_NODE_NAME}." >&2
+    exit 1
+  fi
+  TARGET_INSTANCE_ID="${instance_match[0]}"
+  instance_label="${instance_match[1]}"
+  instance_hostname="${instance_match[2]}"
+  TARGET_PUBLIC_IP="${instance_match[3]}"
+
+  echo "Resolved Vultr instance:"
+  echo "  instance-id: ${TARGET_INSTANCE_ID}"
+  echo "  label: ${instance_label:-<none>}"
+  echo "  hostname: ${instance_hostname:-<none>}"
+  echo "  public-ip: ${TARGET_PUBLIC_IP:-<none>}"
 
   echo
-  echo "Step 1/4: detach node from Kubernetes"
+  echo "Step 1/3: detach node from Kubernetes"
   detach_node_from_cluster "${TARGET_NODE_NAME}"
 
   echo
-  echo "Step 2/4: scale down ingress"
-  scale_down_ingress "${INGRESS_NAMESPACE}" "${INGRESS_DEPLOYMENT}" "${INGRESS_REPLICA_DECREMENT}" "${INGRESS_MIN_REPLICAS}"
-
-  echo
-  echo "Step 3/4: detach VM from load balancer"
+  echo "Step 2/3: detach VM from load balancer"
   detach_vm_from_lb
 
   echo
-  echo "Step 4/4: destroy Vultr VM"
+  echo "Step 3/3: destroy Vultr VM"
   destroy_instance
 
   echo
