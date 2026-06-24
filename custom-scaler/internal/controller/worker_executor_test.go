@@ -243,7 +243,7 @@ func TestReconcileActiveWorkerOperationTimesOutWaitingForObservation(t *testing.
 		},
 	}
 
-	reconciler := &CustomScalerReconciler{
+	reconciler := &CustomScalerControllerBase{
 		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(job).Build(),
 		WorkerExecutor: WorkerExecutorConfig{
 			ObservationTimeout: 5 * time.Minute,

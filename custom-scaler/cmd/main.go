@@ -178,14 +178,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.CustomScalerReconciler{
+	baseControllerBase := &controller.CustomScalerControllerBase{
 		Client:                 mgr.GetClient(),
 		Scheme:                 mgr.GetScheme(),
 		PolicyDefaults:         controller.LoadScalingDefaultsFromEnv(),
 		WorkerCapacityDefaults: controller.LoadWorkerCapacityDefaultsFromEnv(),
 		WorkerExecutor:         controller.LoadWorkerExecutorConfigFromEnv(),
+	}
+
+	if err := (&controller.PodScalingReconciler{
+		CustomScalerControllerBase: baseControllerBase,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "CustomScaler")
+		setupLog.Error(err, "Failed to create controller", "controller", "PodScaling")
+		os.Exit(1)
+	}
+	if err := (&controller.NodeScalingReconciler{
+		CustomScalerControllerBase: baseControllerBase,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "NodeScaling")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

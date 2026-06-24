@@ -20,7 +20,7 @@ type workerPrototypePlan struct {
 	WorkersToDelete int32
 }
 
-func (r *CustomScalerReconciler) reconcileWorkerPrototype(
+func (r *CustomScalerControllerBase) reconcileWorkerPrototype(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	deployment *appsv1.Deployment,
@@ -64,7 +64,7 @@ func (r *CustomScalerReconciler) reconcileWorkerPrototype(
 	return &plan, target, nil
 }
 
-func (r *CustomScalerReconciler) countReadyWorkerNodes(ctx context.Context, spec *autoscalingv1.WorkerPrototypeSpec) (int32, error) {
+func (r *CustomScalerControllerBase) countReadyWorkerNodes(ctx context.Context, spec *autoscalingv1.WorkerPrototypeSpec) (int32, error) {
 	nodes, err := r.listManagedWorkerNodes(ctx, spec)
 	if err != nil {
 		return 0, err
@@ -80,7 +80,7 @@ func (r *CustomScalerReconciler) countReadyWorkerNodes(ctx context.Context, spec
 	return count, nil
 }
 
-func (r *CustomScalerReconciler) listManagedWorkerNodes(ctx context.Context, spec *autoscalingv1.WorkerPrototypeSpec) ([]corev1.Node, error) {
+func (r *CustomScalerControllerBase) listManagedWorkerNodes(ctx context.Context, spec *autoscalingv1.WorkerPrototypeSpec) ([]corev1.Node, error) {
 	var nodeList corev1.NodeList
 	if err := r.List(ctx, &nodeList); err != nil {
 		return nil, err
@@ -207,7 +207,7 @@ func ensureWorkers(
 			break
 		}
 		if unschedulablePods > 0 {
-  			lastAction = "blocked-unschedulable-pods"
+			lastAction = "blocked-unschedulable-pods"
 			lastReason = fmt.Sprintf("unschedulable pods present block deletes: unschedulablePods=%d", unschedulablePods)
 			break
 		}

@@ -17,30 +17,25 @@ limitations under the License.
 package controller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	autoscalingv1 "github.com/Boygioi15/predictive-autoscaling-k8s-test/api/v1"
 )
 
-// CustomScalerReconciler reconciles a CustomScaler object
-type CustomScalerReconciler struct {
+// CustomScalerControllerBase holds shared dependencies and helper methods used
+// by the pod-scaling and node-scaling reconcilers.
+type CustomScalerControllerBase struct {
 	client.Client
 	Scheme                 *runtime.Scheme
 	PolicyDefaults         ScalingDefaults
@@ -57,255 +52,6 @@ type CustomScalerReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=policy,resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create
-
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the CustomScaler object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
-func (r *CustomScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	// 1. Fetch the CustomScaler instance
-	var customScaler autoscalingv1.CustomScaler
-	if err := r.Get(ctx, req.NamespacedName, &customScaler); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-
-	requeueAfter := pollingInterval(customScaler.Spec.IntervalMinutes)
-	log.Info(
-		"Starting forecast polling cycle",
-		"url", customScaler.Spec.URL,
-		"targetDeployment", customScaler.Spec.DeploymentName,
-		"forecastDeployment", forecastDeploymentName(&customScaler),
-		"interval", requeueAfter.String(),
-	)
-
-	// 2. Observe: Call the forecasting service endpoint
-	body, err := buildForecastRequestBody(&customScaler)
-	if err != nil {
-		log.Error(err, "Failed to build forecasting request")
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-
-	log.Info(
-		"Calling forecasting service",
-		"url", customScaler.Spec.URL,
-		"payload", string(body),
-	)
-
-	resp, err := http.Post(customScaler.Spec.URL, "application/json", bytes.NewReader(body))
-	if err != nil {
-		log.Error(err, "Failed to call forecasting service")
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		responseBody, _ := io.ReadAll(resp.Body)
-		log.Error(nil, "Forecasting service returned non-success status", "statusCode", resp.StatusCode, "body", string(responseBody))
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error(err, "Failed to read forecasting service response")
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-
-	log.Info(
-		"Forecasting service response received",
-		"statusCode", resp.StatusCode,
-		"body", string(responseBody),
-	)
-
-	forecast, err := parseForecastResponse(responseBody)
-	if err != nil {
-		log.Error(err, "Response was not a valid forecast payload")
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-
-	policy := r.scalingPolicyFor(&customScaler)
-	normalizedPredictions, predictionUnit := normalizeForecastPredictions(forecast)
-	currentIngressPressureBump := customScaler.Status.IngressPressureBump
-	nextIngressPressureBump, ingressPressureBumpReason := nextIngressPressureBump(currentIngressPressureBump, forecast.Observed, policy)
-	ingressPressureWorkerBump := nextIngressPressureBump * policy.IngressPressureWorkerStep
-	desiredReplicas, peakRPS, effectiveRPS := calculateDesiredReplicas(normalizedPredictions, policy)
-	ingressPressureReplicaBump := nextIngressPressureBump * policy.IngressPressureReplicaStep
-	if ingressPressureReplicaBump > 0 {
-		desiredReplicas += ingressPressureReplicaBump
-		if desiredReplicas > policy.MaxReplicas {
-			desiredReplicas = policy.MaxReplicas
-		}
-	}
-	log.Info(
-		"Calculated desired replicas from forecast",
-		"targetDeployment", customScaler.Spec.DeploymentName,
-		"forecastDeployment", forecastDeploymentName(&customScaler),
-		"rawPredictions", forecast.Predictions,
-		"normalizedPredictions", normalizedPredictions,
-		"predictionUnit", predictionUnit,
-		"peakRPS", peakRPS,
-		"effectiveRPS", effectiveRPS,
-		"safeRPSPerPod", policy.SafeRPSPerPod,
-		"safetyFactor", policy.SafetyFactor,
-		"sparePod", policy.SparePod,
-		"maxReplicas", policy.MaxReplicas,
-		"minPReplicas", policy.MinReplicas,
-		"desiredReplicas", desiredReplicas,
-		"currentIngressPressureBump", currentIngressPressureBump,
-		"nextIngressPressureBump", nextIngressPressureBump,
-		"ingressPressureBumpReason", ingressPressureBumpReason,
-		"ingressPressureReplicaBump", ingressPressureReplicaBump,
-		"ingressPressureWorkerBump", ingressPressureWorkerBump,
-		"ingressPressureWorkerBumpReason", ingressPressureBumpReason,
-	)
-
-	// 3. Analyze & Act: Find the Target Deployment
-	var deployment appsv1.Deployment
-	depName := types.NamespacedName{Namespace: customScaler.Namespace, Name: customScaler.Spec.DeploymentName}
-
-	if err := r.Get(ctx, depName, &deployment); err != nil {
-		log.Error(err, "Failed to find target deployment")
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-
-	// Update replicas if they don't match the endpoint value
-	currentReplicas := int32(1)
-	if deployment.Spec.Replicas != nil {
-		currentReplicas = *deployment.Spec.Replicas
-	}
-
-	scaleDownAllowed := true
-	scaleDownReason := "not-applicable"
-	if desiredReplicas < currentReplicas {
-		scaleDownAllowed, scaleDownReason = allowScaleDown(forecast.Observed, policy)
-		if !scaleDownAllowed {
-			log.Info(
-				"Skipping scale down because guardrails are not healthy",
-				"targetDeployment", customScaler.Spec.DeploymentName,
-				"forecastDeployment", forecastDeploymentName(&customScaler),
-				"currentReplicas", currentReplicas,
-				"desiredReplicas", desiredReplicas,
-				"currentIngressPressureBump", currentIngressPressureBump,
-				"nextIngressPressureBump", nextIngressPressureBump,
-				"ingressPressureReplicaBump", ingressPressureReplicaBump,
-				"scaleDownPolicy", policy.ScaleDownPolicy,
-				"scaleDownReason", scaleDownReason,
-				"observed", forecast.Observed,
-			)
-			desiredReplicas = currentReplicas
-		}
-	}
-
-	if currentReplicas != desiredReplicas {
-		log.Info("Scaling deployment", "Old", currentReplicas, "New", desiredReplicas)
-		deployment.Spec.Replicas = &desiredReplicas
-		if err := r.Update(ctx, &deployment); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	workerNow := time.Now()
-	workerPlan, workerTarget, err := r.reconcileWorkerPrototype(
-		ctx,
-		&customScaler,
-		&deployment,
-		desiredReplicas,
-		ingressPressureWorkerBump,
-		workerNow,
-	)
-	if err != nil {
-		log.Error(err, "Failed to reconcile worker prototype state")
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-	if err := r.reconcileWorkerExecutor(ctx, &customScaler, workerPlan, workerNow); err != nil {
-		log.Error(err, "Failed to reconcile worker prototype executor")
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-	workerStatusChanged := workerPrototypeStatusChanged(customScaler.Status.WorkerPrototype, workerPlan)
-	if workerPlan != nil {
-		customScaler.Status.WorkerPrototype = &workerPlan.Status
-		log.Info(
-			"Worker prototype ensure_worker evaluated",
-			"workerTargetMode", workerTarget.Mode,
-			"workerCapacityStrategy", workerTarget.Strategy,
-			"targetWorkers", workerPlan.Status.TargetWorkerCount,
-			"rawTargetWorkers", workerTarget.RawTargetWorkerCount,
-			"desiredReplicas", workerTarget.DesiredReplicas,
-			"unschedulablePods", workerTarget.UnschedulablePods,
-			"safetyPods", workerTarget.SafetyPods,
-			"currentIngressPressureBump", currentIngressPressureBump,
-			"nextIngressPressureBump", nextIngressPressureBump,
-			"ingressPressureBumpReason", ingressPressureBumpReason,
-			"ingressPressureReplicaBump", ingressPressureReplicaBump,
-			"ingressPressureWorkerBump", ingressPressureWorkerBump,
-			"ingressPressureWorkerBumpReason", ingressPressureBumpReason,
-			"desiredPodsForCapacity", workerTarget.DesiredPodsForCapacity,
-			"nodeAllocatableMilliCPU", workerTarget.NodeAllocatableMilliCPU,
-			"podRequestMilliCPU", workerTarget.PodRequestMilliCPU,
-			"podsPerWorker", workerTarget.PodsPerWorker,
-			"minWorkerCount", workerTarget.MinWorkerCount,
-			"maxWorkerCount", workerTarget.MaxWorkerCount,
-			"readyWorkerCount", workerTarget.ReadyWorkerCount,
-			"currentAppScheduledPods", workerTarget.CurrentAppScheduledPods,
-			"totalAppSlotCapacity", workerTarget.TotalAppSlotCapacity,
-			"missingAppSlots", workerTarget.MissingAppSlots,
-			"requiredReadyWorkers", workerTarget.RequiredReadyWorkers,
-			"observedReadyWorkers", workerPlan.Status.ObservedReadyWorkerCount,
-			"pendingCreateWorkers", workerPlan.Status.PendingCreateCount,
-			"pendingDeleteWorkers", workerPlan.Status.PendingDeleteCount,
-			"effectiveWorkers", workerPlan.Status.EffectiveWorkerCount,
-			"workersToCreate", workerPlan.WorkersToCreate,
-			"workersToDelete", workerPlan.WorkersToDelete,
-			"lastAction", workerPlan.Status.LastAction,
-			"lastReason", workerPlan.Status.LastReason,
-		)
-	}
-
-	// Update status only when it actually changed, otherwise we create extra reconcile events.
-	ingressPressureStatusChanged := customScaler.Status.IngressPressureBump != nextIngressPressureBump ||
-		customScaler.Status.IngressPressureReason != ingressPressureBumpReason
-	if customScaler.Status.LastForecastPeak != peakRPS ||
-		customScaler.Status.LastEffectiveRPS != effectiveRPS ||
-		customScaler.Status.LastDesiredReplicas != desiredReplicas ||
-		customScaler.Status.CurrentReplicas != desiredReplicas ||
-		ingressPressureStatusChanged ||
-		workerStatusChanged {
-		customScaler.Status.LastForecastPeak = peakRPS
-		customScaler.Status.LastEffectiveRPS = effectiveRPS
-		customScaler.Status.LastDesiredReplicas = desiredReplicas
-		customScaler.Status.CurrentReplicas = desiredReplicas
-		customScaler.Status.IngressPressureBump = nextIngressPressureBump
-		customScaler.Status.IngressPressureReason = ingressPressureBumpReason
-		if err := r.Status().Update(ctx, &customScaler); err != nil {
-			log.Error(err, "Failed to update custom scaler status")
-			return ctrl.Result{RequeueAfter: requeueAfter}, nil
-		}
-	}
-
-	if workerPlan != nil {
-		if err := r.reconcileIngressDeployment(ctx, forecast.Observed, policy, workerPlan.Status.ObservedReadyWorkerCount); err != nil {
-			log.Error(err, "Failed to reconcile ingress deployment")
-			return ctrl.Result{RequeueAfter: requeueAfter}, nil
-		}
-	}
-
-	//////Final check
-
-	log.Info(
-		"Forecast polling cycle completed",
-		"deployment", customScaler.Spec.DeploymentName,
-		"replica", desiredReplicas,
-		"nextRunIn", requeueAfter.String(),
-	)
-
-	return ctrl.Result{RequeueAfter: requeueAfter}, nil
-}
 
 type forecastResponse struct {
 	Deployment   string                `json:"deployment"`
@@ -376,7 +122,7 @@ func forecastDeploymentName(customScaler *autoscalingv1.CustomScaler) string {
 	return customScaler.Spec.DeploymentName
 }
 
-func (r *CustomScalerReconciler) scalingPolicyFor(customScaler *autoscalingv1.CustomScaler) scalingPolicy {
+func (r *CustomScalerControllerBase) scalingPolicyFor(customScaler *autoscalingv1.CustomScaler) scalingPolicy {
 	defaults := r.PolicyDefaults.normalized()
 
 	policy := scalingPolicy{
@@ -421,7 +167,7 @@ func (r *CustomScalerReconciler) scalingPolicyFor(customScaler *autoscalingv1.Cu
 	return policy
 }
 
-func (r *CustomScalerReconciler) reconcileIngressDeployment(
+func (r *CustomScalerControllerBase) reconcileIngressDeployment(
 	ctx context.Context,
 	observed map[string][]*float64,
 	policy scalingPolicy,
@@ -694,12 +440,4 @@ func workerOperationChanged(current, next *autoscalingv1.WorkerOperationStatus) 
 		current.JobName != next.JobName ||
 		current.RequestedCount != next.RequestedCount ||
 		current.Message != next.Message
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *CustomScalerReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&autoscalingv1.CustomScaler{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Named("customscaler").
-		Complete(r)
 }

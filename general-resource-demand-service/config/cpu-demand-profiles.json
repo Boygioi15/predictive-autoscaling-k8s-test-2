@@ -1,0 +1,15 @@
+{
+  "baseThreadCpuMs": 5,
+  "cpuNoiseLimitMs": 0,
+  "requestClassWeights": {
+    "directory": 1,
+    "image": 1,
+    "html": 2,
+    "other": 2,
+    "audio": 2,
+    "java": 3,
+    "video": 3,
+    "compressed": 4,
+    "dynamic": 8
+  }
+}

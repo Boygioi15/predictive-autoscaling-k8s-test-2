@@ -1,16 +1,16 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ingress-healthz
+  name: demo-app-ingress
   annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/enable-access-log: "true"
 spec:
   ingressClassName: nginx
   rules:
     - http:
         paths:
-          - path: /healthz
-            pathType: Exact
+          - path: /
+            pathType: Prefix
             backend:
               service:
                 name: demo-app-svc

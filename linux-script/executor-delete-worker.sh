@@ -7,7 +7,7 @@ usage() {
 Usage:
   VULTR_LOAD_BALANCER_ID=<lb-id> \
   [WORKER_TARGET_NODE_NAME=<node-name>] \
-  [WORKER_TEARDOWN_SCRIPT_PATH=/workspace/linux-script/teardown-vultr-worker.sh] \
+  [WORKER_TEARDOWN_SCRIPT_PATH=/workspace/linux-script/teardown-vultr-worker.py] \
   ./linux-script/executor-delete-worker.sh [node-name]
 
 Example:
@@ -33,7 +33,7 @@ main() {
   require_env VULTR_LOAD_BALANCER_ID
 
   local node_name="${1:-${WORKER_TARGET_NODE_NAME:-}}"
-  local script_path="${WORKER_TEARDOWN_SCRIPT_PATH:-./linux-script/teardown-vultr-worker.sh}"
+  local script_path="${WORKER_TEARDOWN_SCRIPT_PATH:-./linux-script/teardown-vultr-worker.py}"
 
   if [[ -z "${node_name}" ]]; then
     echo "Missing worker target node name. Pass it as an argument or WORKER_TARGET_NODE_NAME." >&2
@@ -46,7 +46,7 @@ main() {
   fi
 
   echo "Starting worker delete flow for node ${node_name}..."
-  exec "${script_path}" "${node_name}" "${VULTR_LOAD_BALANCER_ID}"
+  exec "${script_path}" "${node_name}"
 }
 
 main "$@"

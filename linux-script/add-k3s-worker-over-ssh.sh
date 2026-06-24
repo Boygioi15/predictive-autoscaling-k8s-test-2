@@ -57,8 +57,8 @@ main() {
   local node_ip="$2"
   local flannel_iface="$3"
   local node_name="${4:-}"
-  local local_script="linux-script/bootstrap-k3s-worker.sh"
-  local remote_script="/tmp/bootstrap-k3s-worker.sh"
+  local local_script="linux-script/bootstrap-k3s-worker.py"
+  local remote_script="/tmp/bootstrap-k3s-worker.py"
   local known_hosts_file="${SSH_KNOWN_HOSTS_FILE:-$HOME/.ssh/known_hosts}"
   local refresh_known_hosts="${REFRESH_KNOWN_HOSTS:-true}"
   local ssh_opts="${SSH_OPTS:-}"
@@ -74,13 +74,13 @@ main() {
   scp ${ssh_opts} "${local_script}" "${ssh_target}:${remote_script}"
 
   ssh ${ssh_opts} "${ssh_target}" \
-    "chmod +x ${remote_script} && sudo env \
+    "sudo env \
       K3S_URL='${K3S_URL}' \
       K3S_TOKEN='${K3S_TOKEN}' \
       NODE_IP='${node_ip}' \
       FLANNEL_IFACE='${flannel_iface}' \
       NODE_NAME='${node_name}' \
-      bash ${remote_script}"
+      bash -lc 'if ! command -v python3 >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y python3; fi; exec python3 ${remote_script}'"
 }
 
 main "$@"

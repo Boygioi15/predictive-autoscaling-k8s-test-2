@@ -183,7 +183,7 @@ func TestResolveWorkerTargetCountFreeSlotsScalesDownUsingNodeAwareCapacity(t *te
 }
 
 func TestResolveWorkerTargetCountManualModeWinsOverAutoComputation(t *testing.T) {
-	reconciler := &CustomScalerReconciler{
+	reconciler := &CustomScalerControllerBase{
 		WorkerCapacityDefaults: WorkerCapacityDefaults{
 			NodeAllocatableMilliCPU: 1800,
 			PodRequestMilliCPU:      600,
@@ -258,7 +258,7 @@ func TestResolveWorkerTargetCountDirectDivideHonorsMinWorkerCount(t *testing.T) 
 }
 
 func TestResolveWorkerTargetCountManualModeHonorsMaxWorkerCount(t *testing.T) {
-	reconciler := &CustomScalerReconciler{
+	reconciler := &CustomScalerControllerBase{
 		WorkerCapacityDefaults: WorkerCapacityDefaults{
 			NodeAllocatableMilliCPU: 1800,
 			PodRequestMilliCPU:      600,
@@ -294,7 +294,7 @@ func newWorkerCapacityTestReconciler(
 	t *testing.T,
 	defaults WorkerCapacityDefaults,
 	objects ...runtime.Object,
-) (*CustomScalerReconciler, *appsv1.Deployment) {
+) (*CustomScalerControllerBase, *appsv1.Deployment) {
 	t.Helper()
 
 	scheme := runtime.NewScheme()
@@ -308,7 +308,7 @@ func newWorkerCapacityTestReconciler(
 	deployment := newTestDeployment()
 	allObjects := append([]runtime.Object{deployment}, objects...)
 
-	reconciler := &CustomScalerReconciler{
+	reconciler := &CustomScalerControllerBase{
 		Client: fake.NewClientBuilder().
 			WithScheme(scheme).
 			WithRuntimeObjects(allObjects...).

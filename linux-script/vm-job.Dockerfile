@@ -5,7 +5,7 @@ ARG KUBECTL_VERSION=v1.35.5
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    WORKER_E2E_SCRIPT_PATH=/workspace/linux-script/create-worker-e2e.sh
+    WORKER_E2E_SCRIPT_PATH=/workspace/linux-script/create-worker-e2e.py
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -22,6 +22,6 @@ WORKDIR /workspace
 
 COPY linux-script/ /workspace/linux-script/
 
-RUN chmod +x /workspace/linux-script/*.sh
+RUN chmod +x /workspace/linux-script/*.sh /workspace/linux-script/*.py
 
 CMD ["/bin/bash", "-lc", "echo worker-ops image ready"]

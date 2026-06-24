@@ -43,7 +43,7 @@ type workerNodeCapacitySnapshot struct {
 	AppSlots            int32
 }
 
-func (r *CustomScalerReconciler) resolveWorkerTargetCount(
+func (r *CustomScalerControllerBase) resolveWorkerTargetCount(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	deployment *appsv1.Deployment,
@@ -115,7 +115,7 @@ func resolveWorkerTargetCountByDirectDivide(base workerTargetComputation) worker
 	return base
 }
 
-func (r *CustomScalerReconciler) resolveWorkerTargetCountByFreeSlots(
+func (r *CustomScalerControllerBase) resolveWorkerTargetCountByFreeSlots(
 	ctx context.Context,
 	spec *autoscalingv1.WorkerPrototypeSpec,
 	deployment *appsv1.Deployment,
@@ -285,7 +285,7 @@ func podRequestedMilliCPU(pod *corev1.Pod) int32 {
 	return int32(total)
 }
 
-func (r *CustomScalerReconciler) countUnschedulableDeploymentPods(
+func (r *CustomScalerControllerBase) countUnschedulableDeploymentPods(
 	ctx context.Context,
 	deployment *appsv1.Deployment,
 ) (int32, error) {

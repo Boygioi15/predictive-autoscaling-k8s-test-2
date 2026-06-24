@@ -7,7 +7,7 @@ usage() {
 Usage:
   VULTR_LOAD_BALANCER_ID=<lb-id> \
   [SCALER_WORKER_NODE_NAME_PREFIX=k3s-worker] \
-  [WORKER_E2E_SCRIPT_PATH=/workspace/linux-script/create-worker-e2e.sh] \
+  [WORKER_E2E_SCRIPT_PATH=/workspace/linux-script/create-worker-e2e.py] \
   ./linux-script/executor-create-worker.sh [node-name]
 
 Example:
@@ -65,7 +65,7 @@ main() {
   require_env VULTR_LOAD_BALANCER_ID
 
   local node_name="${1:-}"
-  local script_path="${WORKER_E2E_SCRIPT_PATH:-./linux-script/create-worker-e2e.sh}"
+  local script_path="${WORKER_E2E_SCRIPT_PATH:-./linux-script/create-worker-e2e.py}"
   local node_name_prefix="${SCALER_WORKER_NODE_NAME_PREFIX:-k3s-worker}"
   local scaler_name="${SCALER_NAME:-worker}"
 
@@ -79,7 +79,7 @@ main() {
   fi
 
   echo "Starting worker create flow for node ${node_name}..."
-  exec "${script_path}" "${VULTR_LOAD_BALANCER_ID}" "${node_name}"
+  exec "${script_path}" "${node_name}"
 }
 
 main "$@"

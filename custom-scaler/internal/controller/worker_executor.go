@@ -131,7 +131,7 @@ func (c WorkerExecutorConfig) enabledFor(operationType string) bool {
 	}
 }
 
-func (r *CustomScalerReconciler) reconcileWorkerExecutor(
+func (r *CustomScalerControllerBase) reconcileWorkerExecutor(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	plan *workerPrototypePlan,
@@ -155,7 +155,7 @@ func (r *CustomScalerReconciler) reconcileWorkerExecutor(
 	}
 }
 
-func (r *CustomScalerReconciler) reconcileActiveWorkerOperations(
+func (r *CustomScalerControllerBase) reconcileActiveWorkerOperations(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	plan *workerPrototypePlan,
@@ -236,7 +236,7 @@ func (r *CustomScalerReconciler) reconcileActiveWorkerOperations(
 	return nil
 }
 
-func (r *CustomScalerReconciler) startWorkerOperations(
+func (r *CustomScalerControllerBase) startWorkerOperations(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	plan *workerPrototypePlan,
@@ -267,7 +267,7 @@ func (r *CustomScalerReconciler) startWorkerOperations(
 	return nil
 }
 
-func (r *CustomScalerReconciler) startWorkerOperation(
+func (r *CustomScalerControllerBase) startWorkerOperation(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	plan *workerPrototypePlan,
@@ -331,7 +331,7 @@ func (r *CustomScalerReconciler) startWorkerOperation(
 	return nil
 }
 
-func (r *CustomScalerReconciler) prepareWorkerOperationExecution(
+func (r *CustomScalerControllerBase) prepareWorkerOperationExecution(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	operationType string,
@@ -485,7 +485,7 @@ func buildWorkerOperationJob(
 	}
 }
 
-func (r *CustomScalerReconciler) selectWorkerNodeForDeletion(
+func (r *CustomScalerControllerBase) selectWorkerNodeForDeletion(
 	ctx context.Context,
 	spec *autoscalingv1.WorkerPrototypeSpec,
 ) (string, error) {
