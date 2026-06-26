@@ -67,39 +67,39 @@ spec:
         image: controller:latest
         imagePullPolicy: Always
         env:
-        - name: SCALER_SAFE_RPS_PER_POD
-          value: "16"
+        - name: SCALER_FORECAST_CONTRACT_ID
+          value: "demo-linear-regression-v1"
+        - name: SCALER_REQUESTS_PER_POD
+          value: "1500"
+        - name: SCALER_CPU_SECONDS_PER_POD
+          value: "30"
         - name: SCALER_SAFETY_FACTOR
           value: "1.20"
         - name: SCALER_SPARE_POD
-          value: "1"
+          value: "3"
         - name: SCALER_MIN_REPLICAS
           value: "1"
         - name: SCALER_MAX_REPLICAS
-          value: "20"
+          value: "40"
         - name: SCALER_SCALE_DOWN_POLICY
           value: "safe"
-        - name: SCALER_APP_P95_THRESHOLD_SECONDS
-          value: "0.50"
-        - name: SCALER_INGRESS_P95_THRESHOLD_SECONDS
-          value: "0.50"
+        - name: SCALER_APP_ERROR_RATE_THRESHOLD
+          value: "0.05"
+        - name: SCALER_INGRESS_P99_THRESHOLD_SECONDS
+          value: "1"
         - name: SCALER_INGRESS_DEPLOYMENT_NAME
           value: "ingress-nginx-controller"
         - name: SCALER_INGRESS_DEPLOYMENT_NAMESPACE
           value: "ingress-nginx"
-        - name: SCALER_INGRESS_REPLICAS_PER_WORKER
-          value: "4"
-        - name: SCALER_INGRESS_PRESSURE_REQUIRED_POINTS
-          value: "3"
-        - name: SCALER_INGRESS_PRESSURE_INCREASE_STEP
-          value: "1"
-        - name: SCALER_INGRESS_PRESSURE_DECREASE_STEP
+        - name: SCALER_REACTIVE_REQUIRED_POINTS
           value: "2"
-        - name: SCALER_INGRESS_PRESSURE_MAX_BUMP
-          value: "10"
-        - name: SCALER_INGRESS_PRESSURE_WORKER_STEP
+        - name: SCALER_REACTIVE_INCREASE_STEP
           value: "1"
-        - name: SCALER_INGRESS_PRESSURE_REPLICA_STEP
+        - name: SCALER_REACTIVE_DECREASE_STEP
+          value: "2"
+        - name: SCALER_REACTIVE_MAX_BUMP
+          value: "10"
+        - name: SCALER_REACTIVE_REPLICA_STEP
           value: "2"
         - name: SCALER_WORKER_NODE_ALLOCATABLE_MILLICPU
           value: "3800"
@@ -107,12 +107,14 @@ spec:
           value: "400"
         - name: SCALER_WORKER_SAFETY_PODS
           value: "1"
+        - name: SCALER_INGRESS_REPLICAS_PER_WORKER
+          value: "2"
         - name: SCALER_WORKER_CAPACITY_STRATEGY
           value: "free-slots"
         - name: SCALER_WORKER_MIN_COUNT
-          value: "2"
+          value: "1"
         - name: SCALER_WORKER_MAX_COUNT
-          value: "5"
+          value: "4"
         - name: SCALER_WORKER_EXECUTOR_NAMESPACE
           value: "custom-scaler-system"
         - name: SCALER_WORKER_EXECUTOR_SERVICE_ACCOUNT
@@ -136,7 +138,7 @@ spec:
         - name: SCALER_WORKER_OBSERVATION_TIMEOUT_SECONDS
           value: "600"
         - name: SCALER_WORKER_MAX_CONCURRENT_CREATE_OPS
-          value: "2"
+          value: "1"
         - name: SCALER_WORKER_MAX_CONCURRENT_DELETE_OPS
           value: "1"
         name: manager

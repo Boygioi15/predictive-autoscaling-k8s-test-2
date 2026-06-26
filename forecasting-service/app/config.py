@@ -21,9 +21,6 @@ class Settings(BaseSettings):
     remote_model_timeout_seconds: float = Field(default=15.0, gt=0)
 
     forecast_options_path: str = "config/options.json"
-    forecast_selection_path: str = "config/selection.json"
-    forecast_default_option_id: str | None = None
-    forecast_selection_overrides: str = ""
 
 
 settings = Settings()

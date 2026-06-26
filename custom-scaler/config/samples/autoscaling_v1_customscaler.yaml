@@ -7,10 +7,8 @@ metadata:
   name: customscaler-sample
 spec:
   url: "http://forecasting-service.default.svc.cluster.local:8080/forecast"
-  deploymentName: prime-service-deployment
-  forecastDeployment: prime-service
+  deploymentName: demo-app-deployment
   intervalMinutes: 1
-  safeRpsPerPod: 16
   safetyFactor: 1.20
   sparePod: 2
   minReplicas: 5

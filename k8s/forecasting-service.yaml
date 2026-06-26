@@ -14,6 +14,13 @@ spec:
       labels:
         app: forecasting-service
     spec:
+      nodeSelector:
+        role: infra
+      tolerations:
+        - key: role
+          operator: Equal
+          value: infra
+          effect: NoSchedule
       containers:
         - name: forecasting-service-container
           image: docker.io/boygioi/forecasting-service:latest
@@ -22,17 +29,9 @@ spec:
           env:
             - name: PROMETHEUS_BASE_URL
               value: http://monitoring-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090
-            - name: PROMETHEUS_QUERY
-              value: sum(rate(http_requests_total{job="prime-service"}[2m]))
-            - name: AI_SERVER_URL
-              value: http://172.16.1.14:6002/invocations
-            - name: REPLICA_DIVISOR
-              value: "5"
-            - name: MIN_REPLICAS
-              value: "1"
-            - name: MAX_REPLICAS
-              value: "10"
             - name: PROMETHEUS_TIMEOUT_SECONDS
+              value: "30"
+            - name: REMOTE_MODEL_TIMEOUT_SECONDS
               value: "30"
 ---
 apiVersion: v1

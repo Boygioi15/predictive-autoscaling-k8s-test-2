@@ -37,11 +37,11 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		"Starting pod scaling cycle",
 		"url", customScaler.Spec.URL,
 		"targetDeployment", customScaler.Spec.DeploymentName,
-		"forecastDeployment", forecastDeploymentName(&customScaler),
+		"forecastContractID", r.ForecastDefaults.ContractID,
 		"interval", requeueAfter.String(),
 	)
 
-	body, err := buildForecastRequestBody(&customScaler)
+	body, err := r.buildForecastRequestBody()
 	if err != nil {
 		log.Error(err, "Failed to build forecasting request")
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
@@ -85,11 +85,10 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	policy := r.scalingPolicyFor(&customScaler)
-	normalizedPredictions, predictionUnit := normalizeForecastPredictions(forecast)
-	currentIngressPressureBump := customScaler.Status.IngressPressureBump
-	nextPressureBump, pressureReason := nextIngressPressureBump(currentIngressPressureBump, forecast.Observed, policy)
-	desiredReplicas, peakRPS, effectiveRPS := calculateDesiredReplicas(normalizedPredictions, policy)
-	pressureReplicaBump := nextPressureBump * policy.IngressPressureReplicaStep
+	currentReactivePressureBump := customScaler.Status.ReactivePressureBump
+	nextPressureBump, pressureReason := nextReactivePressureBump(currentReactivePressureBump, forecast.Observed, policy)
+	desiredReplicas, demandSummary := calculateDesiredReplicas(forecast, policy)
+	pressureReplicaBump := nextPressureBump * policy.ReactiveReplicaStep
 	if pressureReplicaBump > 0 {
 		desiredReplicas += pressureReplicaBump
 		if desiredReplicas > policy.MaxReplicas {
@@ -100,22 +99,31 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	log.Info(
 		"Calculated desired replicas from forecast",
 		"targetDeployment", customScaler.Spec.DeploymentName,
-		"forecastDeployment", forecastDeploymentName(&customScaler),
+		"forecastContractID", r.ForecastDefaults.ContractID,
 		"rawPredictions", forecast.Predictions,
-		"normalizedPredictions", normalizedPredictions,
-		"predictionUnit", predictionUnit,
-		"peakRPS", peakRPS,
-		"effectiveRPS", effectiveRPS,
-		"safeRPSPerPod", policy.SafeRPSPerPod,
+		"predictionRowsCount", len(forecast.PredictionRows),
+		"peakRequestsPerMinute", demandSummary.PeakRequestsPerMinute,
+		"effectiveRequestsPerMinute", demandSummary.EffectiveRequestsPerMinute,
+		"peakCPUSecondsPerMinute", demandSummary.PeakCPUSecondsPerMinute,
+		"effectiveCPUSecondsPerMinute", demandSummary.EffectiveCPUSecondsPerMinute,
+		"requestReplicaDemand", demandSummary.RequestReplicaDemand,
+		"cpuReplicaDemand", demandSummary.CPUReplicaDemand,
+		"baseReplicaDemand", demandSummary.BaseReplicaDemand,
+		"dominantSignal", demandSummary.DominantSignal,
+		"requestsPerPod", policy.RequestsPerPod,
+		"cpuSecondsPerPod", policy.CPUSecondsPerPod,
 		"safetyFactor", policy.SafetyFactor,
 		"sparePod", policy.SparePod,
 		"maxReplicas", policy.MaxReplicas,
 		"minReplicas", policy.MinReplicas,
+		"appErrorRateThreshold", policy.AppErrorRateThreshold,
+		"ingressP99ThresholdSec", policy.IngressP99ThresholdSec,
+		"reactiveRequiredPoints", policy.ReactiveRequiredPoints,
 		"desiredReplicas", desiredReplicas,
-		"currentIngressPressureBump", currentIngressPressureBump,
-		"nextIngressPressureBump", nextPressureBump,
-		"ingressPressureBumpReason", pressureReason,
-		"ingressPressureReplicaBump", pressureReplicaBump,
+		"currentReactivePressureBump", currentReactivePressureBump,
+		"nextReactivePressureBump", nextPressureBump,
+		"reactivePressureBumpReason", pressureReason,
+		"reactivePressureReplicaBump", pressureReplicaBump,
 	)
 
 	var deployment appsv1.Deployment
@@ -136,12 +144,12 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			log.Info(
 				"Skipping scale down because guardrails are not healthy",
 				"targetDeployment", customScaler.Spec.DeploymentName,
-				"forecastDeployment", forecastDeploymentName(&customScaler),
+				"forecastContractID", r.ForecastDefaults.ContractID,
 				"currentReplicas", currentReplicas,
 				"desiredReplicas", desiredReplicas,
-				"currentIngressPressureBump", currentIngressPressureBump,
-				"nextIngressPressureBump", nextPressureBump,
-				"ingressPressureReplicaBump", pressureReplicaBump,
+				"currentReactivePressureBump", currentReactivePressureBump,
+				"nextReactivePressureBump", nextPressureBump,
+				"reactivePressureReplicaBump", pressureReplicaBump,
 				"scaleDownPolicy", policy.ScaleDownPolicy,
 				"scaleDownReason", scaleDownReason,
 				"observed", forecast.Observed,
@@ -161,8 +169,8 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.patchPodScalingStatus(
 		ctx,
 		&customScaler,
-		peakRPS,
-		effectiveRPS,
+		demandSummary.PeakRequestsPerMinute,
+		demandSummary.EffectiveRequestsPerMinute,
 		desiredReplicas,
 		nextPressureBump,
 		pressureReason,
@@ -187,15 +195,15 @@ func (r *CustomScalerControllerBase) patchPodScalingStatus(
 	peakRPS float64,
 	effectiveRPS float64,
 	desiredReplicas int32,
-	ingressPressureBump int32,
-	ingressPressureReason string,
+	reactivePressureBump int32,
+	reactivePressureReason string,
 ) error {
 	statusChanged := customScaler.Status.LastForecastPeak != peakRPS ||
 		customScaler.Status.LastEffectiveRPS != effectiveRPS ||
 		customScaler.Status.LastDesiredReplicas != desiredReplicas ||
 		customScaler.Status.CurrentReplicas != desiredReplicas ||
-		customScaler.Status.IngressPressureBump != ingressPressureBump ||
-		customScaler.Status.IngressPressureReason != ingressPressureReason
+		customScaler.Status.ReactivePressureBump != reactivePressureBump ||
+		customScaler.Status.ReactivePressureReason != reactivePressureReason
 	if !statusChanged {
 		return nil
 	}
@@ -206,8 +214,8 @@ func (r *CustomScalerControllerBase) patchPodScalingStatus(
 	updated.Status.LastEffectiveRPS = effectiveRPS
 	updated.Status.LastDesiredReplicas = desiredReplicas
 	updated.Status.CurrentReplicas = desiredReplicas
-	updated.Status.IngressPressureBump = ingressPressureBump
-	updated.Status.IngressPressureReason = ingressPressureReason
+	updated.Status.ReactivePressureBump = reactivePressureBump
+	updated.Status.ReactivePressureReason = reactivePressureReason
 
 	return r.Status().Patch(ctx, updated, client.MergeFrom(base))
 }

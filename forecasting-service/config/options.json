@@ -1,39 +1,60 @@
 {
-  "prime-last-value-v1": {
+  "demo-last-value-v1": {
+    "deployment": "demo-app",
+    "namespace": "default",
+    "service": "demo-app-svc",
+    "ingress": "demo-app-ingress",
+    "app_pod_regex": "demo-app-deployment-.*",
     "target_metric": "requests_per_minute",
+    "remote_target_metric": "total_requests_per_minute",
     "feature_metrics": [
-      "rps"
+      "total_requests_per_minute",
+      "total_cpu_seconds_per_minute",
+      "total_bandwidth_bytes_per_minute"
     ],
     "guardrail_queries": {
-      "app_p95_seconds": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"{{deployment}}\"}[1m])))",
-      "ingress_p95_seconds": "histogram_quantile(0.95, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress=\"ingress-backend\"}[1m])))"
+      "app_error_rate": "((sum(increase(http_requests_total{service=\"{{service}}\",status=~\"5..\"}[1m])) or on() vector(0)) / clamp_min((sum(increase(http_requests_total{service=\"{{service}}\"}[1m])) or on() vector(0)), 1))",
+      "ingress_p99_seconds": "histogram_quantile(0.99, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress=\"{{ingress}}\"}[1m])))"
     },
-    "lookback_steps": 60,
-    "horizon_steps": 5,
+    "lookback_steps": 61,
+    "horizon_steps": 20,
     "step_seconds": 60,
     "model_full_name": "last_value:v1",
     "prometheus_queries": {
-      "rps": "sum(increase(http_requests_total{job=\"{{deployment}}\"}[1m]))"
+      "total_requests_per_minute": "sum(increase(nginx_ingress_controller_requests[1m]))",
+      "total_cpu_seconds_per_minute": "sum(increase(container_cpu_usage_seconds_total{namespace=\"{{namespace}}\",pod=~\"{{app_pod_regex}}\",container!=\"POD\",container!=\"\"}[1m]))",
+      "total_bandwidth_bytes_per_minute": "sum(increase(container_network_transmit_bytes_total{namespace=\"{{namespace}}\",pod=~\"{{app_pod_regex}}\"}[1m]))"
     },
     "local": true
   },
-  "prime-linear-regression-v1": {
+  "demo-linear-regression-v1": {
+    "deployment": "demo-app",
+    "namespace": "default",
+    "service": "demo-app-svc",
+    "ingress": "demo-app-ingress",
+    "app_pod_regex": "demo-app-deployment-.*",
     "target_metric": "requests_per_minute",
+    "remote_target_metric": "total_requests_per_minute",
     "feature_metrics": [
-      "rps"
+      "total_requests_per_minute",
+      "total_cpu_seconds_per_minute",
+      "total_bandwidth_bytes_per_minute"
     ],
     "guardrail_queries": {
-      "app_p95_seconds": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"{{deployment}}\"}[1m])))",
-      "ingress_p95_seconds": "histogram_quantile(0.95, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress=\"ingress-backend\"}[1m])))"
+      "app_error_rate": "((sum(increase(http_requests_total{service=\"{{service}}\",status=~\"5..\"}[1m])) or on() vector(0)) / clamp_min((sum(increase(http_requests_total{service=\"{{service}}\"}[1m])) or on() vector(0)), 1))",
+      "ingress_p99_seconds": "histogram_quantile(0.99, sum by (le) (rate(nginx_ingress_controller_request_duration_seconds_bucket{ingress=\"{{ingress}}\"}[1m])))"
     },
-    "lookback_steps": 60,
-    "horizon_steps": 5,
+    "lookback_steps": 61,
+    "horizon_steps": 20,
     "step_seconds": 60,
     "model_full_name": "linear_regression:v1",
     "prometheus_queries": {
-      "rps": "sum(increase(http_requests_total{job=\"{{deployment}}\"}[1m]))"
+      "total_requests_per_minute": "sum(increase(nginx_ingress_controller_requests[1m]))",
+      "total_cpu_seconds_per_minute": "sum(increase(container_cpu_usage_seconds_total{namespace=\"{{namespace}}\",pod=~\"{{app_pod_regex}}\",container!=\"POD\",container!=\"\"}[1m]))",
+      "total_bandwidth_bytes_per_minute": "sum(increase(container_network_transmit_bytes_total{namespace=\"{{namespace}}\",pod=~\"{{app_pod_regex}}\"}[1m]))"
     },
     "local": false,
-    "endpoint": "http://linear-regression-model.default.svc.cluster.local/predict"
+    "endpoint": "http://100.98.89.128:8000/predict/linear_regression/v1",
+    "remote_contract": "linear_regression_serving_v1"
   }
 }

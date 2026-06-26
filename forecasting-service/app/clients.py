@@ -1,11 +1,16 @@
 import math
+import json
+import logging
 from datetime import datetime
 from typing import Any
 
 import httpx
+from pydantic import BaseModel
 
 from .config import settings
-from .models import PrometheusQueryRangeResponse, RemotePredictionRequest
+from .models import PrometheusQueryRangeResponse
+
+logger = logging.getLogger("uvicorn.error")
 
 
 def _format_prometheus_duration(seconds: float) -> str:
@@ -75,9 +80,39 @@ class RemoteModelClient:
         self,
         *,
         endpoint: str,
-        payload: RemotePredictionRequest,
+        payload: BaseModel | dict[str, Any],
     ) -> dict[str, Any]:
+        json_payload = (
+            payload.model_dump(mode="json")
+            if isinstance(payload, BaseModel)
+            else payload
+        )
+        pretty_payload = json.dumps(
+            json_payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        logger.info(
+            "Sending remote model request endpoint=%s payload=\n%s",
+            endpoint,
+            pretty_payload,
+        )
         async with httpx.AsyncClient(timeout=settings.remote_model_timeout_seconds) as client:
-            response = await client.post(endpoint, json=payload.model_dump(mode="json"))
+            response = await client.post(
+                endpoint,
+                json=json_payload,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
             response.raise_for_status()
-            return response.json()
+            response_payload = response.json()
+            logger.info(
+                "Received remote model response endpoint=%s status=%s payload=\n%s",
+                endpoint,
+                response.status_code,
+                json.dumps(response_payload, ensure_ascii=False, indent=2, sort_keys=True),
+            )
+            return response_payload

@@ -70,10 +70,10 @@ type CustomScalerStatus struct {
 	LastDesiredReplicas int32 `json:"lastDesiredReplicas"`
 	// Current replica count
 	CurrentReplicas int32 `json:"currentReplicas"`
-	// Stateful ingress pressure level used to accumulate emergency scaling under sustained saturation.
-	IngressPressureBump int32 `json:"ingressPressureBump,omitempty"`
-	// Human-readable reason for the latest ingress pressure bump transition.
-	IngressPressureReason string `json:"ingressPressureReason,omitempty"`
+	// Stateful reactive pressure level used to accumulate emergency scaling under sustained saturation.
+	ReactivePressureBump int32 `json:"reactivePressureBump,omitempty"`
+	// Human-readable reason for the latest reactive pressure bump transition.
+	ReactivePressureReason string `json:"reactivePressureReason,omitempty"`
 	// Durable worker-planning state for the prototype node scaler.
 	WorkerPrototype *WorkerPrototypeStatus `json:"workerPrototype,omitempty"`
 }

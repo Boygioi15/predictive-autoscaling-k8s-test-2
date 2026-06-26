@@ -182,6 +182,7 @@ func main() {
 		Client:                 mgr.GetClient(),
 		Scheme:                 mgr.GetScheme(),
 		PolicyDefaults:         controller.LoadScalingDefaultsFromEnv(),
+		ForecastDefaults:       controller.LoadForecastingDefaultsFromEnv(),
 		WorkerCapacityDefaults: controller.LoadWorkerCapacityDefaultsFromEnv(),
 		WorkerExecutor:         controller.LoadWorkerExecutorConfigFromEnv(),
 	}

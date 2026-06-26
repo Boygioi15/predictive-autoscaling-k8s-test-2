@@ -1,17 +1,15 @@
 # custom-scaler
 
 ## Description
-Kubernetes custom operator that periodically calls an external forecasting HTTP service, reads a sequence forecast, and converts predicted RPS into a target Deployment replica count. The operator requeues each `CustomScaler` resource based on its configured `intervalMinutes`, so every scaler can poll on its own cadence.
+Kubernetes custom operator that periodically calls an external forecasting HTTP service, reads a workload forecast, and converts the forecast into a target Deployment replica count. The operator requeues each `CustomScaler` resource based on its configured `intervalMinutes`, so every scaler can poll on its own cadence.
 
 Sample `CustomScaler` spec:
 
 ```yaml
 spec:
   url: http://forecasting-service.default.svc.cluster.local:8080/forecast
-  deploymentName: prime-service-deployment
-  forecastDeployment: prime-service
+  deploymentName: demo-app-deployment
   intervalMinutes: 1
-  safeRpsPerPod: 20
   safetyFactor: 1.10
   sparePod: 1
   minReplicas: 1
@@ -22,36 +20,80 @@ The operator expects the forecasting service to return a JSON payload like:
 
 ```json
 {
-  "deployment": "prime-service",
+  "deployment": "demo-app",
+  "contract_id": "demo-linear-regression-v1",
   "step_seconds": 60,
-  "predictions": [18.0, 20.0, 19.0, 21.0, 20.0]
+  "predictions": [1500.0, 1525.0, 1488.0],
+  "prediction_rows": [
+    {
+      "datetime": "2026-06-25T01:01:00Z",
+      "total_requests_per_minute": 1500.0,
+      "total_cpu_seconds_per_minute": 27.5,
+      "total_bandwidth_bytes_per_minute": 21000000.0
+    }
+  ]
 }
 ```
 
-It then applies the first scaling policy:
+It then applies the current scaling policy:
 
 ```text
-peak_rps = max(predictions)
-effective_rps = peak_rps * safety_factor
-desired_replicas = ceil(effective_rps / safe_rps_per_pod)
+peak_requests = max(predictions)
+peak_cpu_seconds = max(prediction_rows[*].total_cpu_seconds_per_minute)
+
+effective_requests = peak_requests * safety_factor
+effective_cpu_seconds = peak_cpu_seconds * safety_factor
+
+request_replicas = ceil(effective_requests / requests_per_pod)
+cpu_replicas = ceil(effective_cpu_seconds / cpu_seconds_per_pod)
+
+desired_replicas = max(request_replicas, cpu_replicas)
 if desired_replicas > 0:
     desired_replicas += spare_pod
 desired_replicas = clamp(desired_replicas, min_replicas, max_replicas)
 ```
+
+The controller then applies a separate reactive bump on top of that forecast
+baseline. If the last `SCALER_REACTIVE_REQUIRED_POINTS` observed points
+both satisfy:
+
+```text
+app_error_rate > SCALER_APP_ERROR_RATE_THRESHOLD
+OR
+ingress_p99_seconds > SCALER_INGRESS_P99_THRESHOLD_SECONDS
+```
+
+then it increases the `ReactivePressureBump` state and adds:
+
+```text
+ReactivePressureBump * SCALER_REACTIVE_REPLICA_STEP
+```
+
+extra replicas to the forecast-driven result.
 
 ## Environment-backed defaults
 
 The controller-manager deployment provides global defaults through environment
 variables:
 
-- `SCALER_SAFE_RPS_PER_POD`
+- `SCALER_FORECAST_CONTRACT_ID`
+- `SCALER_REQUESTS_PER_POD`
+- `SCALER_CPU_SECONDS_PER_POD`
 - `SCALER_SAFETY_FACTOR`
 - `SCALER_SPARE_POD`
 - `SCALER_MIN_REPLICAS`
 - `SCALER_MAX_REPLICAS`
+- `SCALER_APP_ERROR_RATE_THRESHOLD`
+- `SCALER_INGRESS_P99_THRESHOLD_SECONDS`
+- `SCALER_REACTIVE_REQUIRED_POINTS`
+- `SCALER_REACTIVE_INCREASE_STEP`
+- `SCALER_REACTIVE_DECREASE_STEP`
+- `SCALER_REACTIVE_MAX_BUMP`
+- `SCALER_REACTIVE_REPLICA_STEP`
 
-Each `CustomScaler` resource can override these values in its own spec when
-needed.
+The request contract id currently comes from the controller-manager env. The
+legacy `safeRpsPerPod` field is still accepted as a per-scaler override for
+request-capacity if you need a quick one-off override.
 
 ## Getting Started
 

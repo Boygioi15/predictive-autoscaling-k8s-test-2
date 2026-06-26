@@ -1,6 +1,6 @@
 {
-  "baseThreadCpuMs": 5,
-  "cpuNoiseLimitMs": 0,
+  "baseThreadCpuMs": 15,
+  "cpuNoiseLimitMs": 1,
   "requestClassWeights": {
     "directory": 1,
     "image": 1,

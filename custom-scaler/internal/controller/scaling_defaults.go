@@ -6,49 +6,50 @@ import (
 )
 
 const (
-	defaultSafeRPSPerPod                 = 20.0
-	defaultSafetyFactor                  = 1.10
-	defaultSparePod                      = int32(1)
-	defaultMinReplicas                   = int32(1)
-	defaultMaxReplicas                   = int32(10)
-	defaultScaleDownPolicy               = "dangerous"
-	defaultAppP95ThresholdSeconds        = 0.50
-	defaultIngressP95ThresholdSecs       = 0.50
-	defaultIngressDeploymentName         = "ingress-nginx-controller"
-	defaultIngressDeploymentNS           = "ingress-nginx"
-	defaultIngressReplicasPerWorker      = int32(2)
-	defaultIngressPressureRequiredPoints = int32(3)
-	defaultIngressPressureIncreaseStep   = int32(1)
-	defaultIngressPressureDecreaseStep   = int32(2)
-	defaultIngressPressureMaxBump        = int32(10)
-	defaultIngressPressureWorkerStep     = int32(1)
-	defaultIngressPressureReplicaStep    = int32(2)
-	defaultWorkerNodeAllocMilliCPU       = int32(1800)
-	defaultWorkerPodRequestMilliCPU      = int32(600)
-	defaultWorkerSafetyPods              = int32(1)
-	defaultWorkerCapacityStrategy        = "direct-divide"
-	defaultWorkerMinCount                = int32(0)
-	defaultWorkerMaxCount                = int32(0)
+	defaultRequestsPerPod           = 25.0
+	defaultCPUSecondsPerPod         = 30.0
+	defaultSafetyFactor             = 1.10
+	defaultSparePod                 = int32(1)
+	defaultMinReplicas              = int32(1)
+	defaultMaxReplicas              = int32(10)
+	defaultScaleDownPolicy          = "dangerous"
+	defaultAppErrorRateThreshold    = 0.05
+	defaultIngressP99ThresholdSecs  = 0.50
+	defaultIngressDeploymentName    = "ingress-nginx-controller"
+	defaultIngressDeploymentNS      = "ingress-nginx"
+	defaultIngressReplicasPerWorker = int32(2)
+	defaultReactiveRequiredPoints   = int32(2)
+	defaultReactiveIncreaseStep     = int32(1)
+	defaultReactiveDecreaseStep     = int32(2)
+	defaultReactiveMaxBump          = int32(10)
+	defaultReactiveReplicaStep      = int32(2)
+	defaultWorkerNodeAllocMilliCPU  = int32(1800)
+	defaultWorkerPodRequestMilliCPU = int32(600)
+	defaultWorkerSafetyPods         = int32(1)
+	defaultWorkerCapacityStrategy   = "direct-divide"
+	defaultWorkerMinCount           = int32(0)
+	defaultWorkerMaxCount           = int32(0)
+	defaultForecastContractID       = "demo-linear-regression-v1"
 )
 
 type ScalingDefaults struct {
-	SafeRPSPerPod                 float64
-	SafetyFactor                  float64
-	SparePod                      int32
-	MinReplicas                   int32
-	MaxReplicas                   int32
-	ScaleDownPolicy               string
-	AppP95ThresholdSeconds        float64
-	IngressP95ThresholdSec        float64
-	IngressDeploymentName         string
-	IngressDeploymentNS           string
-	IngressReplicasPerWorker      int32
-	IngressPressureRequiredPoints int32
-	IngressPressureIncreaseStep   int32
-	IngressPressureDecreaseStep   int32
-	IngressPressureMaxBump        int32
-	IngressPressureWorkerStep     int32
-	IngressPressureReplicaStep    int32
+	RequestsPerPod           float64
+	CPUSecondsPerPod         float64
+	SafetyFactor             float64
+	SparePod                 int32
+	MinReplicas              int32
+	MaxReplicas              int32
+	ScaleDownPolicy          string
+	AppErrorRateThreshold    float64
+	IngressP99ThresholdSec   float64
+	IngressDeploymentName    string
+	IngressDeploymentNS      string
+	IngressReplicasPerWorker int32
+	ReactiveRequiredPoints   int32
+	ReactiveIncreaseStep     int32
+	ReactiveDecreaseStep     int32
+	ReactiveMaxBump          int32
+	ReactiveReplicaStep      int32
 }
 
 type WorkerCapacityDefaults struct {
@@ -60,25 +61,35 @@ type WorkerCapacityDefaults struct {
 	MaxWorkerCount          int32
 }
 
+type ForecastingDefaults struct {
+	ContractID string
+}
+
 func LoadScalingDefaultsFromEnv() ScalingDefaults {
 	return ScalingDefaults{
-		SafeRPSPerPod:                 getEnvFloat("SCALER_SAFE_RPS_PER_POD", defaultSafeRPSPerPod),
-		SafetyFactor:                  getEnvFloat("SCALER_SAFETY_FACTOR", defaultSafetyFactor),
-		SparePod:                      getEnvInt32("SCALER_SPARE_POD", defaultSparePod),
-		MinReplicas:                   getEnvInt32("SCALER_MIN_REPLICAS", defaultMinReplicas),
-		MaxReplicas:                   getEnvInt32("SCALER_MAX_REPLICAS", defaultMaxReplicas),
-		ScaleDownPolicy:               getEnvString("SCALER_SCALE_DOWN_POLICY", defaultScaleDownPolicy),
-		AppP95ThresholdSeconds:        getEnvFloat("SCALER_APP_P95_THRESHOLD_SECONDS", defaultAppP95ThresholdSeconds),
-		IngressP95ThresholdSec:        getEnvFloat("SCALER_INGRESS_P95_THRESHOLD_SECONDS", defaultIngressP95ThresholdSecs),
-		IngressDeploymentName:         getEnvString("SCALER_INGRESS_DEPLOYMENT_NAME", defaultIngressDeploymentName),
-		IngressDeploymentNS:           getEnvString("SCALER_INGRESS_DEPLOYMENT_NAMESPACE", defaultIngressDeploymentNS),
-		IngressReplicasPerWorker:      getEnvInt32("SCALER_INGRESS_REPLICAS_PER_WORKER", defaultIngressReplicasPerWorker),
-		IngressPressureRequiredPoints: getEnvInt32("SCALER_INGRESS_PRESSURE_REQUIRED_POINTS", defaultIngressPressureRequiredPoints),
-		IngressPressureIncreaseStep:   getEnvInt32("SCALER_INGRESS_PRESSURE_INCREASE_STEP", defaultIngressPressureIncreaseStep),
-		IngressPressureDecreaseStep:   getEnvInt32("SCALER_INGRESS_PRESSURE_DECREASE_STEP", defaultIngressPressureDecreaseStep),
-		IngressPressureMaxBump:        getEnvInt32("SCALER_INGRESS_PRESSURE_MAX_BUMP", defaultIngressPressureMaxBump),
-		IngressPressureWorkerStep:     getEnvInt32("SCALER_INGRESS_PRESSURE_WORKER_STEP", defaultIngressPressureWorkerStep),
-		IngressPressureReplicaStep:    getEnvInt32("SCALER_INGRESS_PRESSURE_REPLICA_STEP", defaultIngressPressureReplicaStep),
+		RequestsPerPod:           getEnvFloat("SCALER_REQUESTS_PER_POD", defaultRequestsPerPod),
+		CPUSecondsPerPod:         getEnvFloat("SCALER_CPU_SECONDS_PER_POD", defaultCPUSecondsPerPod),
+		SafetyFactor:             getEnvFloat("SCALER_SAFETY_FACTOR", defaultSafetyFactor),
+		SparePod:                 getEnvInt32("SCALER_SPARE_POD", defaultSparePod),
+		MinReplicas:              getEnvInt32("SCALER_MIN_REPLICAS", defaultMinReplicas),
+		MaxReplicas:              getEnvInt32("SCALER_MAX_REPLICAS", defaultMaxReplicas),
+		ScaleDownPolicy:          getEnvString("SCALER_SCALE_DOWN_POLICY", defaultScaleDownPolicy),
+		AppErrorRateThreshold:    getEnvFloat("SCALER_APP_ERROR_RATE_THRESHOLD", defaultAppErrorRateThreshold),
+		IngressP99ThresholdSec:   getEnvFloat("SCALER_INGRESS_P99_THRESHOLD_SECONDS", defaultIngressP99ThresholdSecs),
+		IngressDeploymentName:    getEnvString("SCALER_INGRESS_DEPLOYMENT_NAME", defaultIngressDeploymentName),
+		IngressDeploymentNS:      getEnvString("SCALER_INGRESS_DEPLOYMENT_NAMESPACE", defaultIngressDeploymentNS),
+		IngressReplicasPerWorker: getEnvInt32("SCALER_INGRESS_REPLICAS_PER_WORKER", defaultIngressReplicasPerWorker),
+		ReactiveRequiredPoints:   getEnvInt32("SCALER_REACTIVE_REQUIRED_POINTS", defaultReactiveRequiredPoints),
+		ReactiveIncreaseStep:     getEnvInt32("SCALER_REACTIVE_INCREASE_STEP", defaultReactiveIncreaseStep),
+		ReactiveDecreaseStep:     getEnvInt32("SCALER_REACTIVE_DECREASE_STEP", defaultReactiveDecreaseStep),
+		ReactiveMaxBump:          getEnvInt32("SCALER_REACTIVE_MAX_BUMP", defaultReactiveMaxBump),
+		ReactiveReplicaStep:      getEnvInt32("SCALER_REACTIVE_REPLICA_STEP", defaultReactiveReplicaStep),
+	}
+}
+
+func LoadForecastingDefaultsFromEnv() ForecastingDefaults {
+	return ForecastingDefaults{
+		ContractID: getEnvString("SCALER_FORECAST_CONTRACT_ID", defaultForecastContractID),
 	}
 }
 
@@ -94,8 +105,11 @@ func LoadWorkerCapacityDefaultsFromEnv() WorkerCapacityDefaults {
 }
 
 func (d ScalingDefaults) normalized() ScalingDefaults {
-	if d.SafeRPSPerPod <= 0 {
-		d.SafeRPSPerPod = defaultSafeRPSPerPod
+	if d.RequestsPerPod <= 0 {
+		d.RequestsPerPod = defaultRequestsPerPod
+	}
+	if d.CPUSecondsPerPod <= 0 {
+		d.CPUSecondsPerPod = defaultCPUSecondsPerPod
 	}
 	if d.SafetyFactor <= 0 {
 		d.SafetyFactor = defaultSafetyFactor
@@ -114,32 +128,29 @@ func (d ScalingDefaults) normalized() ScalingDefaults {
 	default:
 		d.ScaleDownPolicy = defaultScaleDownPolicy
 	}
-	if d.AppP95ThresholdSeconds <= 0 {
-		d.AppP95ThresholdSeconds = defaultAppP95ThresholdSeconds
+	if d.AppErrorRateThreshold <= 0 {
+		d.AppErrorRateThreshold = defaultAppErrorRateThreshold
 	}
-	if d.IngressP95ThresholdSec <= 0 {
-		d.IngressP95ThresholdSec = defaultIngressP95ThresholdSecs
+	if d.IngressP99ThresholdSec <= 0 {
+		d.IngressP99ThresholdSec = defaultIngressP99ThresholdSecs
 	}
 	if d.IngressReplicasPerWorker < 0 {
 		d.IngressReplicasPerWorker = defaultIngressReplicasPerWorker
 	}
-	if d.IngressPressureRequiredPoints <= 0 {
-		d.IngressPressureRequiredPoints = defaultIngressPressureRequiredPoints
+	if d.ReactiveRequiredPoints <= 0 {
+		d.ReactiveRequiredPoints = defaultReactiveRequiredPoints
 	}
-	if d.IngressPressureIncreaseStep <= 0 {
-		d.IngressPressureIncreaseStep = defaultIngressPressureIncreaseStep
+	if d.ReactiveIncreaseStep <= 0 {
+		d.ReactiveIncreaseStep = defaultReactiveIncreaseStep
 	}
-	if d.IngressPressureDecreaseStep <= 0 {
-		d.IngressPressureDecreaseStep = defaultIngressPressureDecreaseStep
+	if d.ReactiveDecreaseStep <= 0 {
+		d.ReactiveDecreaseStep = defaultReactiveDecreaseStep
 	}
-	if d.IngressPressureMaxBump < 0 {
-		d.IngressPressureMaxBump = defaultIngressPressureMaxBump
+	if d.ReactiveMaxBump < 0 {
+		d.ReactiveMaxBump = defaultReactiveMaxBump
 	}
-	if d.IngressPressureWorkerStep < 0 {
-		d.IngressPressureWorkerStep = defaultIngressPressureWorkerStep
-	}
-	if d.IngressPressureReplicaStep < 0 {
-		d.IngressPressureReplicaStep = defaultIngressPressureReplicaStep
+	if d.ReactiveReplicaStep < 0 {
+		d.ReactiveReplicaStep = defaultReactiveReplicaStep
 	}
 	return d
 }

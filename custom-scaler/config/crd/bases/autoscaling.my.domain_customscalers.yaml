@@ -111,15 +111,6 @@ spec:
                 description: Current replica count
                 format: int32
                 type: integer
-              ingressPressureBump:
-                description: Stateful ingress pressure level used to accumulate emergency
-                  scaling under sustained saturation.
-                format: int32
-                type: integer
-              ingressPressureReason:
-                description: Human-readable reason for the latest ingress pressure
-                  bump transition.
-                type: string
               lastDesiredReplicas:
                 description: The latest desired replica count computed by the operator.
                 format: int32
@@ -131,6 +122,15 @@ spec:
               lastForecastPeak:
                 description: The latest forecast peak seen from the forecasting service.
                 type: number
+              reactivePressureBump:
+                description: Stateful reactive pressure level used to accumulate emergency
+                  scaling under sustained saturation.
+                format: int32
+                type: integer
+              reactivePressureReason:
+                description: Human-readable reason for the latest reactive pressure
+                  bump transition.
+                type: string
               workerPrototype:
                 description: Durable worker-planning state for the prototype node
                   scaler.
