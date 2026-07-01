@@ -74,8 +74,10 @@ open-prometheus:
 	- kubectl port-forward prometheus-monitoring-stack-kube-prom-prometheus-0  9090:9090 -n monitoring
 
 run-custom-load-generator:
+	CUSTOM_LOAD_GENERATOR_IMAGE="$(TAG)" docker compose pull custom-load-generator
 	CUSTOM_LOAD_GENERATOR_IMAGE="$(TAG)" docker compose run --rm custom-load-generator
 run-custom-load-generator-detached:
+	CUSTOM_LOAD_GENERATOR_IMAGE="$(TAG)" docker compose pull custom-load-generator
 	CUSTOM_LOAD_GENERATOR_IMAGE="$(TAG)" docker compose run -d --rm custom-load-generator
 
 install-helm-monitor: 

@@ -61,6 +61,14 @@ class SenderConfig:
     quiet_worker_logs: bool
 
 
+def _row_has_values(row: dict[str, str | None], field_names: tuple[str, ...]) -> bool:
+    for field_name in field_names:
+        value = row.get(field_name)
+        if value is None or value == "":
+            return False
+    return True
+
+
 def _get_int(env_name: str, default: int) -> int:
     raw_value = os.getenv(env_name, str(default))
     try:
@@ -1084,6 +1092,8 @@ def _merge_request_reports(input_paths: list[Path], output_path: Path) -> None:
         with input_path.open(newline="", encoding="utf-8") as csv_file:
             reader = csv.DictReader(csv_file)
             for row in reader:
+                if not _row_has_values(row, ("second", "url", "count")):
+                    continue
                 counts[(row["second"], row["url"])] += int(row["count"])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1102,6 +1112,8 @@ def _merge_statistics_reports(input_paths: list[Path], output_path: Path) -> Non
         with input_path.open(newline="", encoding="utf-8") as csv_file:
             reader = csv.DictReader(csv_file)
             for row in reader:
+                if not _row_has_values(row, ("second", *StatisticsReportWriter.COLUMN_NAMES)):
+                    continue
                 second = row["second"]
                 for column_name in StatisticsReportWriter.COLUMN_NAMES:
                     totals[second][column_name] += int(row[column_name])
@@ -1122,6 +1134,8 @@ def _merge_incident_reports(input_paths: list[Path], output_path: Path) -> None:
         with input_path.open(newline="", encoding="utf-8") as csv_file:
             reader = csv.DictReader(csv_file)
             for row in reader:
+                if not _row_has_values(row, ("timestamp", "second", "url", "incident_type", "message")):
+                    continue
                 rows.append((row["timestamp"], row["second"], row["url"], row["incident_type"], row["message"]))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

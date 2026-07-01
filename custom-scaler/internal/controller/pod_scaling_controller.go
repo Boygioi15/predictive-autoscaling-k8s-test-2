@@ -50,7 +50,7 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	log.Info(
 		"Calling forecasting service",
 		"url", customScaler.Spec.URL,
-		"payload", string(body),
+		"forecastContractID", r.ForecastDefaults.ContractID,
 	)
 
 	resp, err := http.Post(customScaler.Spec.URL, "application/json", bytes.NewReader(body))
@@ -72,17 +72,22 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
-	log.Info(
-		"Forecasting service response received",
-		"statusCode", resp.StatusCode,
-		"body", string(responseBody),
-	)
-
 	forecast, err := parseForecastResponse(responseBody)
 	if err != nil {
 		log.Error(err, "Response was not a valid forecast payload")
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
+
+	log.Info(
+		"Forecasting service response received",
+		"statusCode", resp.StatusCode,
+		"forecastContractID", forecast.ContractID,
+		"predictionCount", len(forecast.Predictions),
+		"predictionRowCount", len(forecast.PredictionRows),
+		"requiredHistoryRows", forecast.RequiredHistoryRows,
+		"providedHistoryRows", forecast.ProvidedHistoryRows,
+		"bufferedHistoryRows", forecast.BufferedHistoryRows,
+	)
 
 	policy := r.scalingPolicyFor(&customScaler)
 	currentReactivePressureBump := customScaler.Status.ReactivePressureBump
@@ -213,15 +218,15 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *CustomScalerControllerBase) patchPodScalingStatus(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
-	peakRPS float64,
-	effectiveRPS float64,
+	peakRequestsPerMinute float64,
+	effectiveRequestsPerMinute float64,
 	desiredReplicas int32,
 	reactivePressureBump int32,
 	reactivePressureReason string,
 	lastLoop *autoscalingv1.PodScalerLoopStatus,
 ) error {
-	statusChanged := customScaler.Status.LastForecastPeak != peakRPS ||
-		customScaler.Status.LastEffectiveRPS != effectiveRPS ||
+	statusChanged := customScaler.Status.LastForecastPeak != peakRequestsPerMinute ||
+		customScaler.Status.LastEffectiveRequestsPerMinute != effectiveRequestsPerMinute ||
 		customScaler.Status.LastDesiredReplicas != desiredReplicas ||
 		customScaler.Status.CurrentReplicas != desiredReplicas ||
 		customScaler.Status.ReactivePressureBump != reactivePressureBump ||
@@ -233,8 +238,8 @@ func (r *CustomScalerControllerBase) patchPodScalingStatus(
 
 	base := customScaler.DeepCopy()
 	updated := customScaler.DeepCopy()
-	updated.Status.LastForecastPeak = peakRPS
-	updated.Status.LastEffectiveRPS = effectiveRPS
+	updated.Status.LastForecastPeak = peakRequestsPerMinute
+	updated.Status.LastEffectiveRequestsPerMinute = effectiveRequestsPerMinute
 	updated.Status.LastDesiredReplicas = desiredReplicas
 	updated.Status.CurrentReplicas = desiredReplicas
 	updated.Status.ReactivePressureBump = reactivePressureBump

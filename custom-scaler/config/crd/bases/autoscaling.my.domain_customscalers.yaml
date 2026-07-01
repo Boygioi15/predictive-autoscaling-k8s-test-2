@@ -61,9 +61,9 @@ spec:
                   clamp.
                 format: int32
                 type: integer
-              safeRpsPerPod:
-                description: Optional per-scaler override for the safe per-pod RPS
-                  capacity.
+              requestsPerPod:
+                description: Optional per-scaler override for the safe per-pod request
+                  capacity per minute.
                 type: number
               safetyFactor:
                 description: Optional per-scaler override for the forecast safety
@@ -115,21 +115,309 @@ spec:
                 description: The latest desired replica count computed by the operator.
                 format: int32
                 type: integer
-              lastEffectiveRps:
-                description: The latest buffered RPS value after applying operator
-                  safety logic.
+              lastEffectiveRequestsPerMinute:
+                description: The latest buffered request volume per minute after applying
+                  operator safety logic.
                 type: number
               lastForecastPeak:
                 description: The latest forecast peak seen from the forecasting service.
                 type: number
               lastNodeLoop:
                 description: Latest detailed node-scaling reconcile snapshot for UI/debugging.
+                properties:
+                  activeOperations:
+                    description: Active worker operations after executor reconciliation.
+                    items:
+                      properties:
+                        commandFinishedAt:
+                          description: When the executor observed the command job
+                            complete.
+                          format: date-time
+                          type: string
+                        jobName:
+                          description: Name of the Kubernetes Job executing the operation.
+                          type: string
+                        jobNamespace:
+                          description: Namespace of the Kubernetes Job executing the
+                            operation.
+                          type: string
+                        message:
+                          description: Last executor message for humans.
+                          type: string
+                        operationType:
+                          description: 'Type of worker operation: create or delete.'
+                          type: string
+                        phase:
+                          description: 'Current executor phase: Running or WaitingForObservation.'
+                          type: string
+                        requestedCount:
+                          description: Number of workers requested by this operation.
+                            The prototype uses 1.
+                          format: int32
+                          type: integer
+                        startedAt:
+                          description: When the executor started the operation.
+                          format: date-time
+                          type: string
+                        targetNodeName:
+                          description: |-
+                            Concrete node name passed to the executor. For create, this is the planned new node name.
+                            For delete, this is the node selected for eviction and teardown.
+                          type: string
+                      type: object
+                    type: array
+                  currentAppScheduledPods:
+                    description: App pods already scheduled on managed workers.
+                    format: int32
+                    type: integer
+                  desiredPodsForCapacity:
+                    description: Pod count the worker planner tried to provide capacity
+                      for.
+                    format: int32
+                    type: integer
+                  desiredReplicas:
+                    description: Desired pod replicas observed by node scaling.
+                    format: int32
+                    type: integer
+                  effectiveWorkers:
+                    description: Effective worker count after pending create/delete
+                      adjustments.
+                    format: int32
+                    type: integer
+                  lastAction:
+                    description: Latest planner action label.
+                    type: string
+                  lastReason:
+                    description: Human-readable explanation for the latest planner
+                      action.
+                    type: string
+                  maxWorkerCount:
+                    description: Maximum worker count allowed by policy.
+                    format: int32
+                    type: integer
+                  minWorkerCount:
+                    description: Minimum worker count allowed by policy.
+                    format: int32
+                    type: integer
+                  missingAppSlots:
+                    description: App slots still missing after using all ready workers.
+                    format: int32
+                    type: integer
+                  nodeAllocatableMilliCpu:
+                    description: Allocatable CPU assumed for each worker node.
+                    format: int32
+                    type: integer
+                  observedAt:
+                    description: Time when the node reconciler completed this snapshot.
+                    format: date-time
+                    type: string
+                  observedReadyWorkers:
+                    description: Ready workers observed by ensure_worker state tracking.
+                    format: int32
+                    type: integer
+                  pendingCreateWorkers:
+                    description: Pending worker create operations tracked in status.
+                    format: int32
+                    type: integer
+                  pendingDeleteWorkers:
+                    description: Pending worker delete operations tracked in status.
+                    format: int32
+                    type: integer
+                  podRequestMilliCpu:
+                    description: Requested CPU assumed for each workload pod.
+                    format: int32
+                    type: integer
+                  podsPerWorker:
+                    description: Number of workload pods each worker can host.
+                    format: int32
+                    type: integer
+                  rawTargetWorkerCount:
+                    description: Raw worker target before min/max bounds are applied.
+                    format: int32
+                    type: integer
+                  readyWorkerCount:
+                    description: Ready workers counted during target computation.
+                    format: int32
+                    type: integer
+                  requiredReadyWorkers:
+                    description: Ready workers required to satisfy current slot demand.
+                    format: int32
+                    type: integer
+                  safetyPods:
+                    description: Extra safety pods reserved by worker capacity policy.
+                    format: int32
+                    type: integer
+                  targetDeployment:
+                    description: Deployment whose desired replica count fed node planning.
+                    type: string
+                  targetWorkerCount:
+                    description: Final worker target after bounds are applied.
+                    format: int32
+                    type: integer
+                  totalAppSlotCapacity:
+                    description: Total app slot capacity observed on ready workers.
+                    format: int32
+                    type: integer
+                  unschedulablePods:
+                    description: Unschedulable workload pods observed during planning.
+                    format: int32
+                    type: integer
+                  workerCapacityStrategy:
+                    description: Worker-capacity strategy used for target computation.
+                    type: string
+                  workerTargetMode:
+                    description: Whether worker planning used a manual or automatic
+                      target.
+                    type: string
+                  workersToCreate:
+                    description: Worker creations enqueued by this reconcile.
+                    format: int32
+                    type: integer
+                  workersToDelete:
+                    description: Worker deletions enqueued by this reconcile.
+                    format: int32
+                    type: integer
                 type: object
-                x-kubernetes-preserve-unknown-fields: true
               lastPodLoop:
                 description: Latest detailed pod-scaling reconcile snapshot for UI/debugging.
+                properties:
+                  appliedScale:
+                    description: Whether this reconcile updated the Deployment replica
+                      count.
+                    type: boolean
+                  baseReplicaDemand:
+                    description: Forecast-only replica demand before spare/reactive
+                      adjustments.
+                    format: int32
+                    type: integer
+                  cpuReplicaDemand:
+                    description: Replica demand derived from CPU.
+                    format: int32
+                    type: integer
+                  currentReactivePressureBump:
+                    description: Reactive pressure level before this reconcile.
+                    format: int32
+                    type: integer
+                  currentReplicas:
+                    description: Replica count observed on the workload before this
+                      reconcile applied changes.
+                    format: int32
+                    type: integer
+                  desiredReplicas:
+                    description: Final desired replica count after all guardrails.
+                    format: int32
+                    type: integer
+                  dominantSignal:
+                    description: Signal that dominated the base replica demand.
+                    type: string
+                  effectiveCpuSecondsPerMinute:
+                    description: Safety-adjusted CPU forecast used for replica math.
+                    type: number
+                  effectiveRequestsPerMinute:
+                    description: Safety-adjusted request forecast used for replica
+                      math.
+                    type: number
+                  forecastBufferedHistoryRows:
+                    description: Buffered context rows reported by the remote model.
+                    format: int32
+                    type: integer
+                  forecastContractId:
+                    description: Forecast contract id sent to the forecasting service.
+                    type: string
+                  forecastFeatureMetrics:
+                    description: Feature metrics included in the selected forecast
+                      contract.
+                    items:
+                      type: string
+                    type: array
+                  forecastGeneratedAt:
+                    description: Timestamp string returned by the forecasting service
+                      for this forecast batch.
+                    type: string
+                  forecastModelName:
+                    description: Forecast model name returned by the forecasting service.
+                    type: string
+                  forecastModelVersion:
+                    description: Forecast model version returned by the forecasting
+                      service.
+                    type: string
+                  forecastPredictionCount:
+                    description: Number of scalar predictions returned by the forecast.
+                    format: int32
+                    type: integer
+                  forecastPredictionRowsCount:
+                    description: Number of per-metric prediction rows returned by
+                      the forecast.
+                    format: int32
+                    type: integer
+                  forecastProvidedHistoryRows:
+                    description: Context rows the remote model received for this forecast.
+                    format: int32
+                    type: integer
+                  forecastRemoteContract:
+                    description: Remote forecasting contract used by the forecasting
+                      service.
+                    type: string
+                  forecastRemoteEndpoint:
+                    description: Remote forecasting endpoint used by the forecasting
+                      service.
+                    type: string
+                  forecastRequestPayload:
+                    description: Raw JSON body sent to the forecasting service.
+                    type: string
+                  forecastRequiredHistoryRows:
+                    description: Context rows the remote model required for this forecast.
+                    format: int32
+                    type: integer
+                  forecastResponseBody:
+                    description: Raw JSON body returned by the forecasting service.
+                    type: string
+                  forecastStepSeconds:
+                    description: Forecasting step size in seconds.
+                    format: int32
+                    type: integer
+                  nextReactivePressureBump:
+                    description: Reactive pressure level chosen by this reconcile.
+                    format: int32
+                    type: integer
+                  observedAt:
+                    description: Time when the pod reconciler completed this snapshot.
+                    format: date-time
+                    type: string
+                  peakCpuSecondsPerMinute:
+                    description: Peak CPU forecast used for replica math.
+                    type: number
+                  peakRequestsPerMinute:
+                    description: Peak request forecast used for replica math.
+                    type: number
+                  proposedReplicas:
+                    description: Proposed replica count before scale-down guardrails
+                      may clamp it.
+                    format: int32
+                    type: integer
+                  reactivePressureReason:
+                    description: Human-readable reason for the reactive pressure decision.
+                    type: string
+                  reactivePressureReplicaBump:
+                    description: Replica increment contributed by the reactive pressure
+                      bump.
+                    format: int32
+                    type: integer
+                  requestReplicaDemand:
+                    description: Replica demand derived from requests.
+                    format: int32
+                    type: integer
+                  scaleDownAllowed:
+                    description: Whether the scale-down guardrail allowed a pending
+                      scale-down decision.
+                    type: boolean
+                  scaleDownReason:
+                    description: Human-readable reason for the latest scale-down decision.
+                    type: string
+                  targetDeployment:
+                    description: Deployment the pod reconciler evaluated.
+                    type: string
                 type: object
-                x-kubernetes-preserve-unknown-fields: true
               reactivePressureBump:
                 description: Stateful reactive pressure level used to accumulate emergency
                   scaling under sustained saturation.
@@ -264,7 +552,7 @@ spec:
             required:
             - currentReplicas
             - lastDesiredReplicas
-            - lastEffectiveRps
+            - lastEffectiveRequestsPerMinute
             - lastForecastPeak
             type: object
         required:

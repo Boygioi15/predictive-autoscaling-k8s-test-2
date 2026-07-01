@@ -180,9 +180,8 @@ func (r *CustomScalerControllerBase) scalingPolicyFor(customScaler *autoscalingv
 		ReactiveReplicaStep:      defaults.ReactiveReplicaStep,
 	}
 
-	// Keep the legacy CR field as a request-capacity override for now.
-	if customScaler.Spec.SafeRPSPerPod != nil && *customScaler.Spec.SafeRPSPerPod > 0 {
-		policy.RequestsPerPod = *customScaler.Spec.SafeRPSPerPod
+	if customScaler.Spec.RequestsPerPod != nil && *customScaler.Spec.RequestsPerPod > 0 {
+		policy.RequestsPerPod = *customScaler.Spec.RequestsPerPod
 	}
 	if customScaler.Spec.SafetyFactor != nil && *customScaler.Spec.SafetyFactor > 0 {
 		policy.SafetyFactor = *customScaler.Spec.SafetyFactor

@@ -92,8 +92,8 @@ variables:
 - `SCALER_REACTIVE_REPLICA_STEP`
 
 The request contract id currently comes from the controller-manager env. The
-legacy `safeRpsPerPod` field is still accepted as a per-scaler override for
-request-capacity if you need a quick one-off override.
+optional `requestsPerPod` field can override per-scaler request capacity if you
+need a quick one-off adjustment.
 
 ## Getting Started
 

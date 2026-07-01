@@ -43,6 +43,16 @@ class Settings(BaseSettings):
         ge=1,
         validation_alias="SYSTEM_SHOWCASE_CACHE_TTL_SECONDS",
     )
+    background_poll_interval_seconds: int = Field(
+        default=5,
+        ge=1,
+        validation_alias="SYSTEM_SHOWCASE_BACKGROUND_POLL_INTERVAL_SECONDS",
+    )
+    loop_history_limit: int = Field(
+        default=2000,
+        ge=10,
+        validation_alias="SYSTEM_SHOWCASE_LOOP_HISTORY_LIMIT",
+    )
 
     scaler_namespace: str = Field(default="default", validation_alias="SYSTEM_SHOWCASE_SCALER_NAMESPACE")
     scaler_name: str = Field(default="customscaler-sample", validation_alias="SYSTEM_SHOWCASE_SCALER_NAME")
@@ -84,6 +94,10 @@ class Settings(BaseSettings):
     @property
     def load_test_dir(self) -> Path:
         return Path(self.load_test_data_dir)
+
+    @property
+    def script_range_csv_path(self) -> Path:
+        return Path(__file__).resolve().parent / "scaled-aggregated-1s.csv"
 
 
 settings = Settings()

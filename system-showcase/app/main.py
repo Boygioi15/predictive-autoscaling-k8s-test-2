@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 from fastapi import Body, FastAPI, Query
@@ -16,7 +18,16 @@ class LoadTestScriptRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
-app = FastAPI(title=settings.app_name)
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await snapshot_service.start_background_poller()
+    try:
+        yield
+    finally:
+        await snapshot_service.stop_background_poller()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 base_path = settings.normalized_base_path
 frontend_dist_dir = settings.frontend_dist_dir
 assets_dir = frontend_dist_dir / "assets"
@@ -62,17 +73,34 @@ async def showcase_snapshot(
     force_refresh: bool = Query(default=False, alias="forceRefresh"),
     scaler_namespace: str | None = Query(default=None, alias="scalerNamespace"),
     scaler_name: str | None = Query(default=None, alias="scalerName"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, alias="pageSize", ge=1, le=100),
 ) -> dict[str, Any]:
     return await snapshot_service.get_snapshot(
         force_refresh=force_refresh,
         scaler_namespace=scaler_namespace,
         scaler_name=scaler_name,
+        page=page,
+        page_size=page_size,
     )
 
 
 @app.get(f"{base_path}/api/load-test")
 async def get_load_test_state() -> dict[str, Any]:
     return snapshot_service.get_load_test()
+
+
+@app.get(f"{base_path}/api/script-range")
+async def get_script_range(
+    real_start: datetime | None = Query(default=None, alias="realStart"),
+    world_cup_start: datetime | None = Query(default=None, alias="worldCupStart"),
+    duration_seconds: int | None = Query(default=None, alias="durationSeconds", ge=1, le=604800),
+) -> dict[str, Any]:
+    return await snapshot_service.get_script_range(
+        real_start=real_start,
+        world_cup_start=world_cup_start,
+        duration_seconds=duration_seconds,
+    )
 
 
 @app.post(f"{base_path}/api/load-test/script")

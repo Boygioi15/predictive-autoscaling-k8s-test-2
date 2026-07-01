@@ -34,6 +34,8 @@ class ForecastResponse(BaseModel):
     target_metric: str
     feature_metrics: list[str]
     step_seconds: int = Field(ge=1)
+    history: dict[str, list[float]] = Field(default_factory=dict)
+    history_rows: list["MetricForecastRow"] = Field(default_factory=list)
     predictions: list[float]
     observed: dict[str, list[float | None]] = Field(default_factory=dict)
     model_name: str

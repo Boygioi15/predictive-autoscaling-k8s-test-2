@@ -34,8 +34,8 @@ type CustomScalerSpec struct {
 	ForecastDeployment string `json:"forecastDeployment,omitempty"`
 	// Polling interval in minutes. Defaults to 1 minute when omitted or invalid.
 	IntervalMinutes int `json:"intervalMinutes,omitempty"`
-	// Optional per-scaler override for the safe per-pod RPS capacity.
-	SafeRPSPerPod *float64 `json:"safeRpsPerPod,omitempty"`
+	// Optional per-scaler override for the safe per-pod request capacity per minute.
+	RequestsPerPod *float64 `json:"requestsPerPod,omitempty"`
 	// Optional per-scaler override for the forecast safety factor.
 	SafetyFactor *float64 `json:"safetyFactor,omitempty"`
 	// Optional per-scaler override for the number of spare pods to add.
@@ -64,8 +64,8 @@ type WorkerPrototypeSpec struct {
 type CustomScalerStatus struct {
 	// The latest forecast peak seen from the forecasting service.
 	LastForecastPeak float64 `json:"lastForecastPeak"`
-	// The latest buffered RPS value after applying operator safety logic.
-	LastEffectiveRPS float64 `json:"lastEffectiveRps"`
+	// The latest buffered request volume per minute after applying operator safety logic.
+	LastEffectiveRequestsPerMinute float64 `json:"lastEffectiveRequestsPerMinute"`
 	// The latest desired replica count computed by the operator.
 	LastDesiredReplicas int32 `json:"lastDesiredReplicas"`
 	// Current replica count

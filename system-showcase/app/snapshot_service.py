@@ -6,21 +6,82 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from kubernetes.client import V1Deployment, V1Job, V1Node, V1Pod
+from kubernetes.client import V1Deployment, V1Job
 
 from .kubernetes_client import KubernetesGateway
 from .load_test_store import LoadTestStore
-from .prometheus_client import PrometheusClient
+from .loop_history_store import LoopHistoryStore
+from .script_range_store import ScriptRangeStore
 from .settings import Settings, settings
 
 
-@dataclass(frozen=True)
-class MetricDefinition:
-    key: str
-    title: str
-    unit: str
-    query_template: str
-    description: str
+POD_DEFAULT_EXCLUDE_TOKENS = ("WORKER", "NODE_ALLOCATABLE", "POD_REQUEST", "PODS_PER_WORKER")
+NODE_DEFAULT_INCLUDE_TOKENS = (
+    "WORKER",
+    "NODE_ALLOCATABLE",
+    "POD_REQUEST",
+    "PODS_PER_WORKER",
+    "INGRESS_REPLICAS_PER_WORKER",
+)
+POD_SIGNAL_SPECS: tuple[tuple[str, str, str, str], ...] = (
+    ("requests", "RPM", "req/min", "total_requests_per_minute"),
+    ("cpu", "CPU", "sec/min", "total_cpu_seconds_per_minute"),
+    ("network", "Network", "bytes/min", "total_bandwidth_bytes_per_minute"),
+)
+POD_LOG_FIELDS: tuple[str, ...] = (
+    "forecastContractId",
+    "forecastModelName",
+    "forecastModelVersion",
+    "forecastGeneratedAt",
+    "forecastStepSeconds",
+    "targetDeployment",
+    "peakRequestsPerMinute",
+    "effectiveRequestsPerMinute",
+    "peakCpuSecondsPerMinute",
+    "effectiveCpuSecondsPerMinute",
+    "requestReplicaDemand",
+    "cpuReplicaDemand",
+    "baseReplicaDemand",
+    "dominantSignal",
+    "currentReplicas",
+    "proposedReplicas",
+    "desiredReplicas",
+    "currentReactivePressureBump",
+    "nextReactivePressureBump",
+    "reactivePressureReplicaBump",
+    "reactivePressureReason",
+    "scaleDownAllowed",
+    "scaleDownReason",
+    "appliedScale",
+)
+NODE_LOG_FIELDS: tuple[str, ...] = (
+    "workerTargetMode",
+    "workerCapacityStrategy",
+    "targetWorkerCount",
+    "rawTargetWorkerCount",
+    "desiredReplicas",
+    "unschedulablePods",
+    "safetyPods",
+    "desiredPodsForCapacity",
+    "nodeAllocatableMilliCpu",
+    "podRequestMilliCpu",
+    "podsPerWorker",
+    "minWorkerCount",
+    "maxWorkerCount",
+    "readyWorkerCount",
+    "currentAppScheduledPods",
+    "totalAppSlotCapacity",
+    "missingAppSlots",
+    "requiredReadyWorkers",
+    "observedReadyWorkers",
+    "pendingCreateWorkers",
+    "pendingDeleteWorkers",
+    "effectiveWorkers",
+    "workersToCreate",
+    "workersToDelete",
+    "lastAction",
+    "lastReason",
+)
 
 
 @dataclass(frozen=True)
@@ -28,110 +89,9 @@ class WorkloadContext:
     scaler_name: str
     scaler_namespace: str
     deployment_name: str
-    app_namespace: str
-    app_service_name: str
-    app_ingress_name: str
-    app_pod_regex: str
     controller_namespace: str
     controller_deployment_name: str
     worker_jobs_namespace: str
-    worker_node_label_key: str
-    worker_node_label_value: str
-
-    @property
-    def base_workload_name(self) -> str:
-        if self.deployment_name.endswith("-deployment"):
-            return self.deployment_name[: -len("-deployment")]
-        return self.deployment_name
-
-
-METRICS: tuple[MetricDefinition, ...] = (
-    MetricDefinition(
-        key="ingress_rps",
-        title="Ingress RPS",
-        unit="rps",
-        query_template='sum(rate(nginx_ingress_controller_requests{{ingress="{app_ingress_name}"}}[1m]))',
-        description="Requests per second observed at the ingress layer.",
-    ),
-    MetricDefinition(
-        key="app_rps",
-        title="App RPS",
-        unit="rps",
-        query_template='sum(rate(http_request_duration_seconds_count{{service="{app_service_name}"}}[1m]))',
-        description="Requests per second seen by the demo app metrics middleware.",
-    ),
-    MetricDefinition(
-        key="cpu_usage",
-        title="CPU Usage",
-        unit="cores",
-        query_template=(
-            'sum(rate(container_cpu_usage_seconds_total{{namespace="{app_namespace}",'
-            'pod=~"{app_pod_regex}",container!="POD",container!=""}}[1m]))'
-        ),
-        description="Aggregate CPU usage rate across demo app pods.",
-    ),
-    MetricDefinition(
-        key="memory_usage",
-        title="Memory Usage",
-        unit="MB",
-        query_template=(
-            'sum(container_memory_usage_bytes{{namespace="{app_namespace}",pod=~"{app_pod_regex}",'
-            'container!=""}})/(1024*1024)'
-        ),
-        description="Aggregate memory usage across demo app pods.",
-    ),
-    MetricDefinition(
-        key="pod_count",
-        title="Pod Count",
-        unit="count",
-        query_template='count(kube_pod_info{{namespace="{app_namespace}",pod=~"{app_pod_regex}"}})',
-        description="Current number of demo app pods.",
-    ),
-    MetricDefinition(
-        key="node_count",
-        title="Node Count",
-        unit="count",
-        query_template="count(kube_node_info)",
-        description="Total nodes visible to the cluster.",
-    ),
-    MetricDefinition(
-        key="ingress_p99",
-        title="Ingress P99",
-        unit="seconds",
-        query_template=(
-            'histogram_quantile(0.99, sum by (le) '
-            '(rate(nginx_ingress_controller_request_duration_seconds_bucket{{ingress="{app_ingress_name}"}}[1m])))'
-        ),
-        description="Ingress p99 latency over the last minute.",
-    ),
-    MetricDefinition(
-        key="app_p99",
-        title="App P99",
-        unit="seconds",
-        query_template=(
-            'histogram_quantile(0.99, sum by (le) '
-            '(rate(http_request_duration_seconds_bucket{{service="{app_service_name}",status!~"5.."}}[1m])))'
-        ),
-        description="Application p99 latency for non-5xx responses.",
-    ),
-    MetricDefinition(
-        key="app_error_rate",
-        title="App Error Rate",
-        unit="ratio",
-        query_template=(
-            '((sum(increase(http_requests_total{{service="{app_service_name}",status=~"5.."}}[1m])) or on() vector(0)) '
-            '/ clamp_min((sum(increase(http_requests_total{{service="{app_service_name}"}}[1m])) or on() vector(0)), 1))'
-        ),
-        description="Application 5xx error rate over the last minute.",
-    ),
-    MetricDefinition(
-        key="nginx_connections",
-        title="Nginx Connections",
-        unit="count",
-        query_template='sum(nginx_ingress_controller_nginx_process_connections{{state=~"active|writing"}})',
-        description="Aggregate active and writing nginx ingress connections.",
-    ),
-)
 
 
 class SnapshotService:
@@ -139,16 +99,24 @@ class SnapshotService:
         self,
         *,
         config: Settings,
-        prometheus: PrometheusClient | None = None,
         kubernetes: KubernetesGateway | None = None,
         load_test_store: LoadTestStore | None = None,
+        loop_history_store: LoopHistoryStore | None = None,
+        script_range_store: ScriptRangeStore | None = None,
     ) -> None:
         self._settings = config
-        self._prometheus = prometheus or PrometheusClient()
         self._kubernetes = kubernetes or KubernetesGateway()
         self._load_test_store = load_test_store or LoadTestStore(config.load_test_dir)
+        self._loop_history_store = loop_history_store or LoopHistoryStore(
+            config.load_test_dir,
+            limit=config.loop_history_limit,
+        )
+        self._script_range_store = script_range_store or ScriptRangeStore(config.script_range_csv_path)
         self._cache_lock = asyncio.Lock()
-        self._cache: dict[tuple[str, str], tuple[datetime, dict[str, Any]]] = {}
+        self._history_lock = asyncio.Lock()
+        self._cache: dict[tuple[str, str, int, int], tuple[datetime, dict[str, Any]]] = {}
+        self._poller_task: asyncio.Task[None] | None = None
+        self._poller_stop: asyncio.Event | None = None
 
     async def get_snapshot(
         self,
@@ -156,10 +124,14 @@ class SnapshotService:
         force_refresh: bool = False,
         scaler_namespace: str | None = None,
         scaler_name: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
     ) -> dict[str, Any]:
         namespace = scaler_namespace or self._settings.scaler_namespace
         name = scaler_name or self._settings.scaler_name
-        cache_key = (namespace, name)
+        normalized_page = max(page, 1)
+        normalized_page_size = min(max(page_size, 1), 100)
+        cache_key = (namespace, name, normalized_page, normalized_page_size)
 
         if not force_refresh:
             cached = self._cache.get(cache_key)
@@ -176,7 +148,12 @@ class SnapshotService:
                     if datetime.now(UTC) - cached_at < timedelta(seconds=self._settings.cache_ttl_seconds):
                         return payload
 
-            payload = await self._build_snapshot(namespace=namespace, name=name)
+            payload = await self._build_snapshot(
+                namespace=namespace,
+                name=name,
+                page=normalized_page,
+                page_size=normalized_page_size,
+            )
             self._cache[cache_key] = (datetime.now(UTC), payload)
             return payload
 
@@ -189,9 +166,97 @@ class SnapshotService:
     def save_load_test_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
         return self._load_test_store.save_metadata(metadata)
 
-    async def _build_snapshot(self, *, namespace: str, name: str) -> dict[str, Any]:
+    async def get_script_range(
+        self,
+        *,
+        real_start: datetime | None = None,
+        world_cup_start: datetime | None = None,
+        duration_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._script_range_store.get_range,
+            real_start=real_start,
+            world_cup_start=world_cup_start,
+            duration_seconds=duration_seconds,
+        )
+
+    async def start_background_poller(self) -> None:
+        if self._poller_task is not None and not self._poller_task.done():
+            return
+
+        self._poller_stop = asyncio.Event()
+        self._poller_task = asyncio.create_task(
+            self._run_background_poller(),
+            name="system-showcase-history-poller",
+        )
+
+    async def stop_background_poller(self) -> None:
+        if self._poller_stop is not None:
+            self._poller_stop.set()
+
+        if self._poller_task is not None:
+            await self._poller_task
+
+        self._poller_task = None
+        self._poller_stop = None
+
+    async def _run_background_poller(self) -> None:
+        stop_event = self._poller_stop
+        if stop_event is None:
+            return
+
+        while not stop_event.is_set():
+            try:
+                await self.poll_history_once()
+            except Exception:
+                pass
+
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=self._settings.background_poll_interval_seconds,
+                )
+            except TimeoutError:
+                continue
+
+    async def poll_history_once(self) -> bool:
+        try:
+            scaler_items = await asyncio.to_thread(self._kubernetes.list_custom_scalers)
+        except Exception:
+            return False
+
+        changed = False
+        async with self._history_lock:
+            for scaler in scaler_items:
+                metadata = scaler.get("metadata", {})
+                status = scaler.get("status", {})
+                scaler_key = f"{metadata.get('namespace', self._settings.scaler_namespace)}/{metadata.get('name', self._settings.scaler_name)}"
+                result = self._loop_history_store.sync_latest(
+                    scaler_key=scaler_key,
+                    pod_loop=self._normalize_pod_loop(status.get("lastPodLoop")),
+                    node_loop=self._normalize_node_loop(status.get("lastNodeLoop")),
+                )
+                if result.get("changed"):
+                    changed = True
+
+        if changed:
+            async with self._cache_lock:
+                self._cache.clear()
+
+        return changed
+
+    async def _build_snapshot(
+        self,
+        *,
+        namespace: str,
+        name: str,
+        page: int,
+        page_size: int,
+    ) -> dict[str, Any]:
         errors: list[dict[str, str]] = []
         available_scalers: list[dict[str, Any]] = []
+        generated_at = datetime.now(UTC).isoformat()
+        scaler_key = f"{namespace}/{name}"
 
         try:
             scaler_items = await asyncio.to_thread(self._kubernetes.list_custom_scalers)
@@ -201,39 +266,51 @@ class SnapshotService:
             scaler_items = []
 
         active_scaler = self._choose_scaler(scaler_items, namespace=namespace, name=name)
-        load_test = self._load_test_store.get_snapshot()
-        generated_at = datetime.now(UTC).isoformat()
-
         if active_scaler is None:
+            async with self._history_lock:
+                empty_history = self._loop_history_store.get_snapshot(scaler_key=scaler_key)
+            paginated_history = self._paginate_minute_groups(
+                empty_history["podLoops"],
+                empty_history["nodeLoops"],
+                page=page,
+                page_size=page_size,
+            )
             return {
                 "generatedAt": generated_at,
                 "basePath": self._settings.normalized_base_path,
                 "cacheTtlSeconds": self._settings.cache_ttl_seconds,
                 "availableScalers": available_scalers,
                 "activeScaler": None,
-                "system": {"cards": [], "charts": []},
-                "controller": {"policyDefaults": {}, "podLoop": None, "nodeLoop": None},
-                "resources": {"deployment": None, "pods": {"counts": {}, "items": []}, "workerNodes": {"counts": {}, "items": []}, "jobs": []},
-                "loadTest": load_test,
-                "errors": errors + [{"source": "kubernetes.customscalers", "message": "No CustomScaler resource was found."}],
+                "controller": {
+                    "latest": {"podLoop": None, "nodeLoop": None},
+                    "historyLimit": empty_history["limit"],
+                    "historyCounts": {
+                        "podLoops": len(empty_history["podLoops"]),
+                        "nodeLoops": len(empty_history["nodeLoops"]),
+                        "minuteGroups": paginated_history["totalItems"],
+                    },
+                    "minuteGroups": paginated_history["items"],
+                    "recentMinuteGroups": paginated_history["recentItems"],
+                    "pagination": paginated_history["pagination"],
+                    "sidebar": {
+                        "podConfig": {"spec": {}, "status": {}, "defaults": {}},
+                        "nodeConfig": {"spec": {}, "status": {}, "defaults": {}},
+                        "jobStatus": [],
+                    },
+                },
+                "errors": errors + [
+                    {
+                        "source": "kubernetes.customscalers",
+                        "message": "No CustomScaler resource was found.",
+                    }
+                ],
             }
 
         context = self._context_from_scaler(active_scaler)
-
-        deployment_task = asyncio.to_thread(
-            self._kubernetes.read_deployment,
-            context.scaler_namespace,
-            context.deployment_name,
-        )
         controller_deployment_task = asyncio.to_thread(
             self._kubernetes.read_controller_deployment,
             context.controller_namespace,
             context.controller_deployment_name,
-        )
-        worker_nodes_task = asyncio.to_thread(
-            self._kubernetes.list_managed_worker_nodes,
-            label_key=context.worker_node_label_key,
-            label_value=context.worker_node_label_value,
         )
         jobs_task = asyncio.to_thread(
             self._kubernetes.list_worker_jobs,
@@ -241,30 +318,31 @@ class SnapshotService:
             scaler_name=context.scaler_name,
             scaler_namespace=context.scaler_namespace,
         )
-        metrics_task = self._build_metrics(context)
 
-        deployment_result, controller_deployment, worker_nodes, jobs, metrics_payload = await asyncio.gather(
-            self._capture("kubernetes.deployment", deployment_task, errors),
+        controller_deployment, jobs = await asyncio.gather(
             self._capture("kubernetes.controllerDeployment", controller_deployment_task, errors),
-            self._capture("kubernetes.workerNodes", worker_nodes_task, errors, default=[]),
             self._capture("kubernetes.jobs", jobs_task, errors, default=[]),
-            self._capture("prometheus.metrics", metrics_task, errors, default={"cards": [], "charts": []}),
         )
 
-        app_pods: list[V1Pod] = []
-        if deployment_result is not None:
-            app_pods = await self._capture(
-                "kubernetes.pods",
-                asyncio.to_thread(
-                    self._kubernetes.list_pods_for_deployment,
-                    context.scaler_namespace,
-                    deployment_result,
-                ),
-                errors,
-                default=[],
-            )
-
         controller_env = self._extract_controller_env(controller_deployment)
+        pod_defaults, node_defaults = self._split_controller_defaults(controller_env)
+        scaler_spec = active_scaler.get("spec", {})
+        scaler_status = active_scaler.get("status", {})
+
+        latest_pod_loop = self._normalize_pod_loop(scaler_status.get("lastPodLoop"))
+        latest_node_loop = self._normalize_node_loop(scaler_status.get("lastNodeLoop"))
+        async with self._history_lock:
+            history = self._loop_history_store.sync_latest(
+                scaler_key=f"{context.scaler_namespace}/{context.scaler_name}",
+                pod_loop=latest_pod_loop,
+                node_loop=latest_node_loop,
+            )
+        paginated_history = self._paginate_minute_groups(
+            history["podLoops"],
+            history["nodeLoops"],
+            page=page,
+            page_size=page_size,
+        )
 
         return {
             "generatedAt": generated_at,
@@ -274,92 +352,38 @@ class SnapshotService:
             "activeScaler": {
                 "name": active_scaler["metadata"]["name"],
                 "namespace": active_scaler["metadata"]["namespace"],
-                "spec": active_scaler.get("spec", {}),
-                "status": active_scaler.get("status", {}),
+                "spec": scaler_spec,
+                "status": scaler_status,
             },
-            "system": metrics_payload,
             "controller": {
-                "policyDefaults": controller_env,
-                "controllerDeployment": self._serialize_deployment(controller_deployment) if controller_deployment else None,
-                "podLoop": self._normalize_pod_loop(active_scaler.get("status", {}).get("lastPodLoop")),
-                "nodeLoop": active_scaler.get("status", {}).get("lastNodeLoop"),
+                "latest": {
+                    "podLoop": latest_pod_loop,
+                    "nodeLoop": latest_node_loop,
+                },
+                "historyLimit": history["limit"],
+                "historyCounts": {
+                    "podLoops": len(history["podLoops"]),
+                    "nodeLoops": len(history["nodeLoops"]),
+                    "minuteGroups": paginated_history["totalItems"],
+                },
+                "minuteGroups": paginated_history["items"],
+                "recentMinuteGroups": paginated_history["recentItems"],
+                "pagination": paginated_history["pagination"],
+                "sidebar": {
+                    "podConfig": {
+                        "spec": self._pod_config_spec(scaler_spec),
+                        "status": self._pod_config_status(scaler_status),
+                        "defaults": pod_defaults,
+                    },
+                    "nodeConfig": {
+                        "spec": self._node_config_spec(scaler_spec),
+                        "status": self._node_config_status(scaler_status, latest_node_loop),
+                        "defaults": node_defaults,
+                    },
+                    "jobStatus": [self._serialize_job(job) for job in jobs[:24]],
+                },
             },
-            "resources": {
-                "deployment": self._serialize_deployment(deployment_result) if deployment_result else None,
-                "pods": self._serialize_pods(app_pods),
-                "workerNodes": self._serialize_nodes(worker_nodes),
-                "jobs": [self._serialize_job(job) for job in jobs[:12]],
-            },
-            "loadTest": load_test,
             "errors": errors,
-        }
-
-    async def _build_metrics(self, context: WorkloadContext) -> dict[str, Any]:
-        end = datetime.now(UTC)
-        start = end - timedelta(minutes=self._settings.metrics_window_minutes)
-
-        async def build_metric(metric: MetricDefinition) -> dict[str, Any]:
-            query = metric.query_template.format(
-                app_namespace=context.app_namespace,
-                app_service_name=context.app_service_name,
-                app_ingress_name=context.app_ingress_name,
-                app_pod_regex=context.app_pod_regex,
-            )
-            try:
-                series = await self._prometheus.query_range(
-                    query,
-                    start=start,
-                    end=end,
-                    step_seconds=self._settings.metrics_step_seconds,
-                )
-                points = [
-                    {"timestamp": point.timestamp, "value": point.value}
-                    for series_item in series
-                    for point in series_item.points
-                ]
-                current = points[-1]["value"] if points else 0.0
-                return {
-                    "id": metric.key,
-                    "title": metric.title,
-                    "unit": metric.unit,
-                    "description": metric.description,
-                    "query": query,
-                    "currentValue": current,
-                    "series": [
-                        {
-                            "name": series_item.name,
-                            "points": [{"timestamp": point.timestamp, "value": point.value} for point in series_item.points],
-                        }
-                        for series_item in series
-                    ],
-                    "error": None,
-                }
-            except Exception as exc:
-                return {
-                    "id": metric.key,
-                    "title": metric.title,
-                    "unit": metric.unit,
-                    "description": metric.description,
-                    "query": query,
-                    "currentValue": None,
-                    "series": [],
-                    "error": str(exc),
-                }
-
-        charts = await asyncio.gather(*(build_metric(metric) for metric in METRICS))
-        cards = [
-            {
-                "id": chart["id"],
-                "title": chart["title"],
-                "unit": chart["unit"],
-                "description": chart["description"],
-                "value": chart["currentValue"],
-            }
-            for chart in charts
-        ]
-        return {
-            "cards": cards,
-            "charts": charts,
         }
 
     async def _capture(
@@ -401,29 +425,13 @@ class SnapshotService:
     def _context_from_scaler(self, scaler: dict[str, Any]) -> WorkloadContext:
         metadata = scaler.get("metadata", {})
         spec = scaler.get("spec", {})
-        worker_spec = spec.get("workerPrototype") or {}
-
-        deployment_name = spec.get("deploymentName") or "demo-app-deployment"
-        base_name = deployment_name[: -len("-deployment")] if deployment_name.endswith("-deployment") else deployment_name
-        app_namespace = metadata.get("namespace") or self._settings.app_namespace
-
-        service_name = self._settings.app_service_name or f"{base_name}-svc"
-        ingress_name = self._settings.app_ingress_name or f"{base_name}-ingress"
-        pod_regex = self._settings.app_pod_regex or f"{deployment_name}-.*"
-
         return WorkloadContext(
             scaler_name=metadata.get("name", self._settings.scaler_name),
             scaler_namespace=metadata.get("namespace", self._settings.scaler_namespace),
-            deployment_name=deployment_name,
-            app_namespace=app_namespace,
-            app_service_name=service_name,
-            app_ingress_name=ingress_name,
-            app_pod_regex=pod_regex,
+            deployment_name=spec.get("deploymentName") or "demo-app-deployment",
             controller_namespace=self._settings.controller_namespace,
             controller_deployment_name=self._settings.controller_deployment_name,
             worker_jobs_namespace=self._settings.worker_jobs_namespace,
-            worker_node_label_key=worker_spec.get("nodeLabelKey", ""),
-            worker_node_label_value=worker_spec.get("nodeLabelValue", ""),
         )
 
     def _extract_controller_env(self, deployment: V1Deployment | None) -> dict[str, str]:
@@ -437,14 +445,194 @@ class SnapshotService:
                 env_map[env_var.name] = env_var.value or ""
         return dict(sorted(env_map.items()))
 
+    def _split_controller_defaults(self, env_map: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
+        pod_defaults: dict[str, str] = {}
+        node_defaults: dict[str, str] = {}
+
+        for key, value in env_map.items():
+            if any(token in key for token in NODE_DEFAULT_INCLUDE_TOKENS):
+                node_defaults[key] = value
+            elif not any(token in key for token in POD_DEFAULT_EXCLUDE_TOKENS):
+                pod_defaults[key] = value
+            else:
+                node_defaults[key] = value
+
+        return pod_defaults, node_defaults
+
     def _normalize_pod_loop(self, payload: dict[str, Any] | None) -> dict[str, Any] | None:
         if payload is None:
             return None
 
         normalized = dict(payload)
-        normalized["forecastRequestPayloadJson"] = self._parse_json_string(payload.get("forecastRequestPayload"))
-        normalized["forecastResponseBodyJson"] = self._parse_json_string(payload.get("forecastResponseBody"))
+        if "appliedScale" not in normalized:
+            normalized["appliedScale"] = False
+        request_body = self._parse_json_string(payload.get("forecastRequestPayload"))
+        response_body = self._parse_json_string(payload.get("forecastResponseBody"))
+        history = self._extract_response_history(response_body)
+        if not history:
+            history = self._extract_input_history(request_body)
+        if not history and isinstance(response_body, dict):
+            history = response_body.get("history", {}) or {}
+        observed = response_body.get("observed", {}) if isinstance(response_body, dict) else {}
+        prediction_rows = response_body.get("prediction_rows", []) if isinstance(response_body, dict) else []
+        prediction_values = response_body.get("predictions", []) if isinstance(response_body, dict) else []
+        observed_at = str(payload.get("observedAt") or "")
+
+        normalized["loopKey"] = self._build_loop_key("pod", observed_at, payload.get("desiredReplicas"))
+        normalized["minuteBucket"] = self._minute_bucket(observed_at)
+        normalized["signals"] = [
+            self._build_pod_signal(
+                signal_id=signal_id,
+                label=label,
+                unit=unit,
+                metric_key=metric_key,
+                history=history,
+                observed=observed,
+                prediction_rows=prediction_rows,
+                request_predictions=prediction_values,
+            )
+            for signal_id, label, unit, metric_key in POD_SIGNAL_SPECS
+        ]
+        normalized["logFields"] = self._ordered_log_fields(normalized, POD_LOG_FIELDS)
+        normalized.pop("forecastRequestPayload", None)
+        normalized.pop("forecastResponseBody", None)
         return normalized
+
+    def _normalize_node_loop(self, payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        if payload is None:
+            return None
+
+        normalized = dict(payload)
+        observed_at = str(payload.get("observedAt") or "")
+        normalized["loopKey"] = self._build_loop_key(
+            "node",
+            observed_at,
+            payload.get("targetWorkerCount"),
+        )
+        normalized["minuteBucket"] = self._minute_bucket(observed_at)
+        normalized["logFields"] = self._ordered_log_fields(normalized, NODE_LOG_FIELDS)
+        normalized["activeOperations"] = payload.get("activeOperations") or []
+        return normalized
+
+    def _build_pod_signal(
+        self,
+        *,
+        signal_id: str,
+        label: str,
+        unit: str,
+        metric_key: str,
+        history: dict[str, Any],
+        observed: dict[str, Any],
+        prediction_rows: list[dict[str, Any]],
+        request_predictions: list[Any],
+    ) -> dict[str, Any]:
+        prediction_rows_source = [
+            row.get(metric_key)
+            for row in prediction_rows
+            if isinstance(row, dict) and metric_key in row
+        ]
+
+        input_source = history.get(metric_key)
+        if input_source is None:
+            input_source = observed.get(metric_key)
+
+        if metric_key == "total_requests_per_minute":
+            prediction_source = prediction_rows_source or request_predictions
+        else:
+            prediction_source = prediction_rows_source
+
+        input_points = self._downsample_numeric_series(input_source, max_points=60)
+        prediction_points = self._downsample_numeric_series(prediction_source, max_points=20)
+        return {
+            "id": signal_id,
+            "label": label,
+            "unit": unit,
+            "input": input_points,
+            "prediction": prediction_points,
+            "inputLast": input_points[-1] if input_points else None,
+            "predictionLast": prediction_points[-1] if prediction_points else None,
+            "predictionPeak": max(prediction_points) if prediction_points else None,
+        }
+
+    def _extract_input_history(self, request_body: Any) -> dict[str, list[float]]:
+        if not isinstance(request_body, dict):
+            return {}
+
+        raw_history = request_body.get("history")
+        if isinstance(raw_history, dict):
+            return {
+                key: self._downsample_numeric_series(values, max_points=10_000)
+                for key, values in raw_history.items()
+                if isinstance(values, list)
+            }
+
+        if not isinstance(raw_history, list):
+            return {}
+
+        extracted: dict[str, list[float]] = {}
+        for metric_key in (
+            "total_requests_per_minute",
+            "total_cpu_seconds_per_minute",
+            "total_bandwidth_bytes_per_minute",
+        ):
+            extracted[metric_key] = self._downsample_numeric_series(
+                [
+                    row.get(metric_key)
+                    for row in raw_history
+                    if isinstance(row, dict) and metric_key in row
+                ],
+                max_points=10_000,
+            )
+        return extracted
+
+    def _extract_response_history(self, response_body: Any) -> dict[str, list[float]]:
+        if not isinstance(response_body, dict):
+            return {}
+
+        if isinstance(response_body.get("history"), dict):
+            return {
+                key: self._downsample_numeric_series(values, max_points=10_000)
+                for key, values in response_body["history"].items()
+                if isinstance(values, list)
+            }
+
+        raw_history_rows = response_body.get("history_rows")
+        if not isinstance(raw_history_rows, list):
+            return {}
+
+        extracted: dict[str, list[float]] = {}
+        for metric_key in (
+            "total_requests_per_minute",
+            "total_cpu_seconds_per_minute",
+            "total_bandwidth_bytes_per_minute",
+        ):
+            extracted[metric_key] = self._downsample_numeric_series(
+                [
+                    row.get(metric_key)
+                    for row in raw_history_rows
+                    if isinstance(row, dict) and metric_key in row
+                ],
+                max_points=10_000,
+            )
+        return extracted
+
+    def _ordered_log_fields(
+        self,
+        payload: dict[str, Any],
+        ordered_keys: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        fields: list[dict[str, Any]] = []
+        for key in ordered_keys:
+            if key not in payload:
+                continue
+            fields.append(
+                {
+                    "key": key,
+                    "label": key,
+                    "value": payload.get(key),
+                }
+            )
+        return fields
 
     def _parse_json_string(self, value: Any) -> Any:
         if not isinstance(value, str) or not value.strip():
@@ -454,96 +642,148 @@ class SnapshotService:
         except json.JSONDecodeError:
             return value
 
-    def _serialize_deployment(self, deployment: V1Deployment | None) -> dict[str, Any] | None:
-        if deployment is None:
-            return None
+    def _downsample_numeric_series(
+        self,
+        values: Any,
+        *,
+        max_points: int = 24,
+    ) -> list[float]:
+        if not isinstance(values, list):
+            return []
 
-        status = deployment.status
-        spec = deployment.spec
-        return {
-            "name": deployment.metadata.name,
-            "namespace": deployment.metadata.namespace,
-            "images": [container.image for container in spec.template.spec.containers],
-            "selector": spec.selector.match_labels or {},
-            "desiredReplicas": spec.replicas or 0,
-            "readyReplicas": status.ready_replicas or 0,
-            "availableReplicas": status.available_replicas or 0,
-            "updatedReplicas": status.updated_replicas or 0,
-            "observedGeneration": status.observed_generation or 0,
-            "conditions": [
-                {
-                    "type": condition.type,
-                    "status": condition.status,
-                    "reason": condition.reason,
-                    "message": condition.message,
-                }
-                for condition in status.conditions or []
-            ],
-        }
+        numeric_values: list[float] = []
+        for item in values:
+            if item is None:
+                continue
+            try:
+                numeric_values.append(float(item))
+            except (TypeError, ValueError):
+                continue
 
-    def _serialize_pods(self, pods: list[V1Pod]) -> dict[str, Any]:
-        items = [self._serialize_pod(pod) for pod in pods]
-        ready_count = sum(1 for item in items if item["ready"])
-        phases: dict[str, int] = {}
-        for item in items:
-            phases[item["phase"]] = phases.get(item["phase"], 0) + 1
-        return {
-            "counts": {
-                "total": len(items),
-                "ready": ready_count,
-                "notReady": max(len(items) - ready_count, 0),
-                "phases": phases,
-            },
-            "items": items,
-        }
+        if len(numeric_values) <= max_points:
+            return numeric_values
 
-    def _serialize_pod(self, pod: V1Pod) -> dict[str, Any]:
-        statuses = pod.status.container_statuses or []
-        ready_containers = sum(1 for status in statuses if status.ready)
-        restart_count = sum(status.restart_count for status in statuses)
-        return {
-            "name": pod.metadata.name,
-            "phase": pod.status.phase or "Unknown",
-            "nodeName": pod.spec.node_name or "",
-            "podIP": pod.status.pod_ip or "",
-            "ready": all(status.ready for status in statuses) if statuses else False,
-            "readyContainers": ready_containers,
-            "containerCount": len(statuses),
-            "restartCount": restart_count,
-            "qosClass": pod.status.qos_class or "",
-            "createdAt": pod.metadata.creation_timestamp.isoformat() if pod.metadata.creation_timestamp else "",
-        }
+        result: list[float] = []
+        last_index = len(numeric_values) - 1
+        for point_index in range(max_points):
+            raw_index = round((point_index / max(max_points - 1, 1)) * last_index)
+            result.append(numeric_values[raw_index])
+        return result
 
-    def _serialize_nodes(self, nodes: list[V1Node]) -> dict[str, Any]:
-        items = [self._serialize_node(node) for node in nodes]
-        ready_count = sum(1 for item in items if item["ready"])
-        return {
-            "counts": {
-                "total": len(items),
-                "ready": ready_count,
-                "notReady": max(len(items) - ready_count, 0),
-            },
-            "items": items,
-        }
+    def _build_loop_key(self, prefix: str, observed_at: str, fallback_value: Any) -> str:
+        return f"{prefix}:{observed_at or 'unknown'}:{fallback_value if fallback_value is not None else 'none'}"
 
-    def _serialize_node(self, node: V1Node) -> dict[str, Any]:
-        labels = node.metadata.labels or {}
-        roles = sorted(
-            key.split("/", 1)[1]
-            for key in labels
-            if key.startswith("node-role.kubernetes.io/")
+    def _minute_bucket(self, value: str) -> str:
+        if not value:
+            return "unknown"
+
+        try:
+            normalized = value.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(normalized)
+        except ValueError:
+            return value[:16]
+
+        return dt.astimezone(UTC).replace(second=0, microsecond=0).isoformat()
+
+    def _paginate_minute_groups(
+        self,
+        pod_loops: list[dict[str, Any]],
+        node_loops: list[dict[str, Any]],
+        *,
+        page: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        grouped_pod_loops: dict[str, list[dict[str, Any]]] = {}
+        grouped_node_loops: dict[str, list[dict[str, Any]]] = {}
+
+        for loop in reversed(pod_loops):
+            bucket = str(loop.get("minuteBucket") or "unknown")
+            grouped_pod_loops.setdefault(bucket, []).append(loop)
+
+        for loop in reversed(node_loops):
+            bucket = str(loop.get("minuteBucket") or "unknown")
+            grouped_node_loops.setdefault(bucket, []).append(loop)
+
+        ordered_keys = sorted(
+            set(grouped_pod_loops) | set(grouped_node_loops),
+            reverse=True,
         )
-        allocatable = node.status.allocatable or {}
-        alloc_cpu = allocatable.get("cpu")
-        alloc_mem = allocatable.get("memory")
+        total_items = len(ordered_keys)
+        total_pages = max((total_items + page_size - 1) // page_size, 1)
+        current_page = min(max(page, 1), total_pages)
+        start_index = (current_page - 1) * page_size
+        end_index = min(start_index + page_size, total_items)
+
+        def build_group(bucket: str) -> dict[str, Any]:
+            return {
+                "groupKey": bucket,
+                "minuteBucket": bucket,
+                "podLoops": grouped_pod_loops.get(bucket, []),
+                "nodeLoops": grouped_node_loops.get(bucket, []),
+            }
+
         return {
-            "name": node.metadata.name,
-            "ready": self._node_ready(node),
-            "roles": roles,
-            "allocatableCpu": alloc_cpu,
-            "allocatableMemory": alloc_mem,
-            "labels": {key: value for key, value in labels.items() if key.startswith("node-role.kubernetes.io/") or key == "role"},
-            "createdAt": node.metadata.creation_timestamp.isoformat() if node.metadata.creation_timestamp else "",
+            "items": [build_group(bucket) for bucket in ordered_keys[start_index:end_index]],
+            "recentItems": [build_group(bucket) for bucket in ordered_keys[:16]],
+            "totalItems": total_items,
+            "pagination": {
+                "page": current_page,
+                "pageSize": page_size,
+                "totalItems": total_items,
+                "totalPages": total_pages,
+                "hasPreviousPage": current_page > 1,
+                "hasNextPage": current_page < total_pages,
+                "startItem": start_index + 1 if total_items else 0,
+                "endItem": end_index,
+            },
+        }
+
+    def _pod_config_spec(self, spec: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "url": spec.get("url"),
+            "deploymentName": spec.get("deploymentName"),
+            "forecastDeployment": spec.get("forecastDeployment"),
+            "intervalMinutes": spec.get("intervalMinutes"),
+            "requestsPerPod": spec.get("requestsPerPod"),
+            "safetyFactor": spec.get("safetyFactor"),
+            "sparePod": spec.get("sparePod"),
+            "minReplicas": spec.get("minReplicas"),
+            "maxReplicas": spec.get("maxReplicas"),
+        }
+
+    def _pod_config_status(self, status: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "lastForecastPeak": status.get("lastForecastPeak"),
+            "lastEffectiveRequestsPerMinute": status.get("lastEffectiveRequestsPerMinute"),
+            "lastDesiredReplicas": status.get("lastDesiredReplicas"),
+            "currentReplicas": status.get("currentReplicas"),
+            "reactivePressureBump": status.get("reactivePressureBump"),
+            "reactivePressureReason": status.get("reactivePressureReason"),
+        }
+
+    def _node_config_spec(self, spec: dict[str, Any]) -> dict[str, Any]:
+        worker_spec = spec.get("workerPrototype") or {}
+        return {
+            "targetWorkerCount": worker_spec.get("targetWorkerCount"),
+            "maxBatchSize": worker_spec.get("maxBatchSize"),
+            "nodeLabelKey": worker_spec.get("nodeLabelKey"),
+            "nodeLabelValue": worker_spec.get("nodeLabelValue"),
+        }
+
+    def _node_config_status(
+        self,
+        status: dict[str, Any],
+        latest_node_loop: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        worker_status = status.get("workerPrototype") or {}
+        return {
+            "targetWorkerCount": worker_status.get("targetWorkerCount"),
+            "observedReadyWorkerCount": worker_status.get("observedReadyWorkerCount"),
+            "pendingCreateCount": worker_status.get("pendingCreateCount"),
+            "pendingDeleteCount": worker_status.get("pendingDeleteCount"),
+            "effectiveWorkerCount": worker_status.get("effectiveWorkerCount"),
+            "lastAction": worker_status.get("lastAction") or (latest_node_loop or {}).get("lastAction"),
+            "lastReason": worker_status.get("lastReason") or (latest_node_loop or {}).get("lastReason"),
         }
 
     def _serialize_job(self, job: V1Job) -> dict[str, Any]:
@@ -568,12 +808,6 @@ class SnapshotService:
                 for condition in status.conditions or []
             ],
         }
-
-    def _node_ready(self, node: V1Node) -> bool:
-        for condition in node.status.conditions or []:
-            if condition.type == "Ready":
-                return condition.status == "True"
-        return False
 
 
 snapshot_service = SnapshotService(config=settings)

@@ -83,6 +83,11 @@ class ForecastingService:
             history=history,
             generated_at=generated_at,
         )
+        history_rows = self._build_response_history_rows(
+            history=history,
+            generated_at=generated_at,
+            step_seconds=option.step_seconds,
+        )
 
         return ForecastResponse(
             deployment=deployment,
@@ -90,6 +95,8 @@ class ForecastingService:
             target_metric=option.target_metric,
             feature_metrics=option.feature_metrics,
             step_seconds=option.step_seconds,
+            history=history,
+            history_rows=history_rows,
             predictions=prediction_result.predictions,
             observed=observed,
             model_name=option.model_name,
@@ -408,6 +415,39 @@ class ForecastingService:
                 )
             )
 
+        return rows
+
+    def _build_response_history_rows(
+        self,
+        *,
+        history: dict[str, list[float]],
+        generated_at: datetime,
+        step_seconds: int,
+    ) -> list[MetricForecastRow]:
+        if not all(metric_name in history for metric_name in LINEAR_REGRESSION_HISTORY_METRICS):
+            return []
+
+        series_length = min(
+            len(history[metric_name]) for metric_name in LINEAR_REGRESSION_HISTORY_METRICS
+        )
+        if series_length == 0:
+            return []
+
+        start_at = generated_at - timedelta(seconds=step_seconds * (series_length - 1))
+        rows: list[MetricForecastRow] = []
+        for index in range(series_length):
+            rows.append(
+                MetricForecastRow(
+                    datetime=start_at + timedelta(seconds=index * step_seconds),
+                    total_requests_per_minute=float(history["total_requests_per_minute"][index]),
+                    total_cpu_seconds_per_minute=float(
+                        history["total_cpu_seconds_per_minute"][index]
+                    ),
+                    total_bandwidth_bytes_per_minute=float(
+                        history["total_bandwidth_bytes_per_minute"][index]
+                    ),
+                )
+            )
         return rows
 
     def _series_value_for_offset(self, series: list[float], offset: int) -> float:

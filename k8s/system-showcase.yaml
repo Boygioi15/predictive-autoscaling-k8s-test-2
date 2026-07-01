@@ -61,6 +61,19 @@ subjects:
     name: system-showcase
     namespace: default
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: system-showcase-data
+  labels:
+    app: system-showcase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -111,10 +124,17 @@ spec:
               value: custom-scaler-system
             - name: SYSTEM_SHOWCASE_CACHE_TTL_SECONDS
               value: "5"
+            - name: SYSTEM_SHOWCASE_BACKGROUND_POLL_INTERVAL_SECONDS
+              value: "5"
+            - name: SYSTEM_SHOWCASE_LOOP_HISTORY_LIMIT
+              value: "2000"
             - name: SYSTEM_SHOWCASE_METRICS_WINDOW_MINUTES
               value: "20"
             - name: SYSTEM_SHOWCASE_METRICS_STEP_SECONDS
               value: "60"
+          volumeMounts:
+            - name: system-showcase-data
+              mountPath: /tmp/system-showcase
           readinessProbe:
             httpGet:
               path: /health
@@ -127,6 +147,10 @@ spec:
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 20
+      volumes:
+        - name: system-showcase-data
+          persistentVolumeClaim:
+            claimName: system-showcase-data
 ---
 apiVersion: v1
 kind: Service
