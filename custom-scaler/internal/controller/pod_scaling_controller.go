@@ -138,8 +138,11 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		currentReplicas = *deployment.Spec.Replicas
 	}
 
+	proposedReplicas := desiredReplicas
+	scaleDownAllowed := true
+	scaleDownReason := "not-applicable"
 	if desiredReplicas < currentReplicas {
-		scaleDownAllowed, scaleDownReason := allowScaleDown(forecast.Observed, policy)
+		scaleDownAllowed, scaleDownReason = allowScaleDown(forecast.Observed, policy)
 		if !scaleDownAllowed {
 			log.Info(
 				"Skipping scale down because guardrails are not healthy",
@@ -158,6 +161,7 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	appliedScale := currentReplicas != desiredReplicas
 	if currentReplicas != desiredReplicas {
 		log.Info("Scaling deployment", "Old", currentReplicas, "New", desiredReplicas)
 		deployment.Spec.Replicas = &desiredReplicas
@@ -174,6 +178,23 @@ func (r *PodScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		desiredReplicas,
 		nextPressureBump,
 		pressureReason,
+		buildLastPodLoopStatus(
+			&customScaler,
+			forecast,
+			string(body),
+			string(responseBody),
+			demandSummary,
+			currentReactivePressureBump,
+			nextPressureBump,
+			pressureReason,
+			pressureReplicaBump,
+			currentReplicas,
+			proposedReplicas,
+			desiredReplicas,
+			scaleDownAllowed,
+			scaleDownReason,
+			appliedScale,
+		),
 	); err != nil {
 		log.Error(err, "Failed to update pod scaling status")
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
@@ -197,13 +218,15 @@ func (r *CustomScalerControllerBase) patchPodScalingStatus(
 	desiredReplicas int32,
 	reactivePressureBump int32,
 	reactivePressureReason string,
+	lastLoop *autoscalingv1.PodScalerLoopStatus,
 ) error {
 	statusChanged := customScaler.Status.LastForecastPeak != peakRPS ||
 		customScaler.Status.LastEffectiveRPS != effectiveRPS ||
 		customScaler.Status.LastDesiredReplicas != desiredReplicas ||
 		customScaler.Status.CurrentReplicas != desiredReplicas ||
 		customScaler.Status.ReactivePressureBump != reactivePressureBump ||
-		customScaler.Status.ReactivePressureReason != reactivePressureReason
+		customScaler.Status.ReactivePressureReason != reactivePressureReason ||
+		lastLoop != nil
 	if !statusChanged {
 		return nil
 	}
@@ -216,6 +239,11 @@ func (r *CustomScalerControllerBase) patchPodScalingStatus(
 	updated.Status.CurrentReplicas = desiredReplicas
 	updated.Status.ReactivePressureBump = reactivePressureBump
 	updated.Status.ReactivePressureReason = reactivePressureReason
+	if lastLoop != nil {
+		updated.Status.LastPodLoop = lastLoop.DeepCopy()
+	} else {
+		updated.Status.LastPodLoop = nil
+	}
 
 	return r.Status().Patch(ctx, updated, client.MergeFrom(base))
 }

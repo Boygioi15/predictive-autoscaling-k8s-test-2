@@ -122,6 +122,14 @@ spec:
               lastForecastPeak:
                 description: The latest forecast peak seen from the forecasting service.
                 type: number
+              lastNodeLoop:
+                description: Latest detailed node-scaling reconcile snapshot for UI/debugging.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              lastPodLoop:
+                description: Latest detailed pod-scaling reconcile snapshot for UI/debugging.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               reactivePressureBump:
                 description: Stateful reactive pressure level used to accumulate emergency
                   scaling under sustained saturation.

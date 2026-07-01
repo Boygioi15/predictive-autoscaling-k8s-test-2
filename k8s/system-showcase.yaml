@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: system-showcase
+  labels:
+    app: system-showcase
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: system-showcase-reader
+  labels:
+    app: system-showcase
+rules:
+  - apiGroups:
+      - autoscaling.my.domain
+    resources:
+      - customscalers
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system-showcase-reader
+  labels:
+    app: system-showcase
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system-showcase-reader
+subjects:
+  - kind: ServiceAccount
+    name: system-showcase
+    namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: system-showcase-deployment
+  labels:
+    app: system-showcase
+    role: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: system-showcase
+  template:
+    metadata:
+      labels:
+        app: system-showcase
+        role: infra
+    spec:
+      serviceAccountName: system-showcase
+      nodeSelector:
+        role: infra
+      tolerations:
+        - key: role
+          operator: Equal
+          value: infra
+          effect: NoSchedule
+      containers:
+        - name: system-showcase-container
+          image: docker.io/boygioi/system-showcase:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SYSTEM_SHOWCASE_BASE_PATH
+              value: /system-showcase
+            - name: PROMETHEUS_BASE_URL
+              value: http://monitoring-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090
+            - name: SYSTEM_SHOWCASE_SCALER_NAMESPACE
+              value: default
+            - name: SYSTEM_SHOWCASE_SCALER_NAME
+              value: customscaler-sample
+            - name: SYSTEM_SHOWCASE_APP_NAMESPACE
+              value: default
+            - name: SYSTEM_SHOWCASE_CONTROLLER_NAMESPACE
+              value: custom-scaler-system
+            - name: SYSTEM_SHOWCASE_CONTROLLER_DEPLOYMENT_NAME
+              value: custom-scaler-controller-manager
+            - name: SYSTEM_SHOWCASE_WORKER_JOBS_NAMESPACE
+              value: custom-scaler-system
+            - name: SYSTEM_SHOWCASE_CACHE_TTL_SECONDS
+              value: "5"
+            - name: SYSTEM_SHOWCASE_METRICS_WINDOW_MINUTES
+              value: "20"
+            - name: SYSTEM_SHOWCASE_METRICS_STEP_SECONDS
+              value: "60"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: system-showcase-svc
+  labels:
+    app: system-showcase
+spec:
+  type: ClusterIP
+  selector:
+    app: system-showcase
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

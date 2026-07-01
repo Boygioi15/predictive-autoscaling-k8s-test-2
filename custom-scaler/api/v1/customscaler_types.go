@@ -74,8 +74,146 @@ type CustomScalerStatus struct {
 	ReactivePressureBump int32 `json:"reactivePressureBump,omitempty"`
 	// Human-readable reason for the latest reactive pressure bump transition.
 	ReactivePressureReason string `json:"reactivePressureReason,omitempty"`
+	// Latest detailed pod-scaling reconcile snapshot for UI/debugging.
+	LastPodLoop *PodScalerLoopStatus `json:"lastPodLoop,omitempty"`
+	// Latest detailed node-scaling reconcile snapshot for UI/debugging.
+	LastNodeLoop *NodeScalerLoopStatus `json:"lastNodeLoop,omitempty"`
 	// Durable worker-planning state for the prototype node scaler.
 	WorkerPrototype *WorkerPrototypeStatus `json:"workerPrototype,omitempty"`
+}
+
+type PodScalerLoopStatus struct {
+	// Time when the pod reconciler completed this snapshot.
+	ObservedAt *metav1.Time `json:"observedAt,omitempty"`
+	// Deployment the pod reconciler evaluated.
+	TargetDeployment string `json:"targetDeployment,omitempty"`
+	// Forecast contract id sent to the forecasting service.
+	ForecastContractID string `json:"forecastContractId,omitempty"`
+	// Forecast model name returned by the forecasting service.
+	ForecastModelName string `json:"forecastModelName,omitempty"`
+	// Forecast model version returned by the forecasting service.
+	ForecastModelVersion string `json:"forecastModelVersion,omitempty"`
+	// Remote forecasting contract used by the forecasting service.
+	ForecastRemoteContract string `json:"forecastRemoteContract,omitempty"`
+	// Remote forecasting endpoint used by the forecasting service.
+	ForecastRemoteEndpoint string `json:"forecastRemoteEndpoint,omitempty"`
+	// Feature metrics included in the selected forecast contract.
+	ForecastFeatureMetrics []string `json:"forecastFeatureMetrics,omitempty"`
+	// Forecasting step size in seconds.
+	ForecastStepSeconds int32 `json:"forecastStepSeconds,omitempty"`
+	// Timestamp string returned by the forecasting service for this forecast batch.
+	ForecastGeneratedAt string `json:"forecastGeneratedAt,omitempty"`
+	// Number of scalar predictions returned by the forecast.
+	ForecastPredictionCount int32 `json:"forecastPredictionCount,omitempty"`
+	// Number of per-metric prediction rows returned by the forecast.
+	ForecastPredictionRowsCount int32 `json:"forecastPredictionRowsCount,omitempty"`
+	// Context rows the remote model required for this forecast.
+	ForecastRequiredHistoryRows int32 `json:"forecastRequiredHistoryRows,omitempty"`
+	// Context rows the remote model received for this forecast.
+	ForecastProvidedHistoryRows int32 `json:"forecastProvidedHistoryRows,omitempty"`
+	// Buffered context rows reported by the remote model.
+	ForecastBufferedHistoryRows int32 `json:"forecastBufferedHistoryRows,omitempty"`
+	// Raw JSON body sent to the forecasting service.
+	ForecastRequestPayload string `json:"forecastRequestPayload,omitempty"`
+	// Raw JSON body returned by the forecasting service.
+	ForecastResponseBody string `json:"forecastResponseBody,omitempty"`
+	// Peak request forecast used for replica math.
+	PeakRequestsPerMinute float64 `json:"peakRequestsPerMinute,omitempty"`
+	// Safety-adjusted request forecast used for replica math.
+	EffectiveRequestsPerMinute float64 `json:"effectiveRequestsPerMinute,omitempty"`
+	// Peak CPU forecast used for replica math.
+	PeakCPUSecondsPerMinute float64 `json:"peakCpuSecondsPerMinute,omitempty"`
+	// Safety-adjusted CPU forecast used for replica math.
+	EffectiveCPUSecondsPerMinute float64 `json:"effectiveCpuSecondsPerMinute,omitempty"`
+	// Replica demand derived from requests.
+	RequestReplicaDemand int32 `json:"requestReplicaDemand,omitempty"`
+	// Replica demand derived from CPU.
+	CPUReplicaDemand int32 `json:"cpuReplicaDemand,omitempty"`
+	// Forecast-only replica demand before spare/reactive adjustments.
+	BaseReplicaDemand int32 `json:"baseReplicaDemand,omitempty"`
+	// Signal that dominated the base replica demand.
+	DominantSignal string `json:"dominantSignal,omitempty"`
+	// Reactive pressure level before this reconcile.
+	CurrentReactivePressureBump int32 `json:"currentReactivePressureBump,omitempty"`
+	// Reactive pressure level chosen by this reconcile.
+	NextReactivePressureBump int32 `json:"nextReactivePressureBump,omitempty"`
+	// Human-readable reason for the reactive pressure decision.
+	ReactivePressureReason string `json:"reactivePressureReason,omitempty"`
+	// Replica increment contributed by the reactive pressure bump.
+	ReactivePressureReplicaBump int32 `json:"reactivePressureReplicaBump,omitempty"`
+	// Replica count observed on the workload before this reconcile applied changes.
+	CurrentReplicas int32 `json:"currentReplicas,omitempty"`
+	// Proposed replica count before scale-down guardrails may clamp it.
+	ProposedReplicas int32 `json:"proposedReplicas,omitempty"`
+	// Final desired replica count after all guardrails.
+	DesiredReplicas int32 `json:"desiredReplicas,omitempty"`
+	// Whether the scale-down guardrail allowed a pending scale-down decision.
+	ScaleDownAllowed bool `json:"scaleDownAllowed,omitempty"`
+	// Human-readable reason for the latest scale-down decision.
+	ScaleDownReason string `json:"scaleDownReason,omitempty"`
+	// Whether this reconcile updated the Deployment replica count.
+	AppliedScale bool `json:"appliedScale,omitempty"`
+}
+
+type NodeScalerLoopStatus struct {
+	// Time when the node reconciler completed this snapshot.
+	ObservedAt *metav1.Time `json:"observedAt,omitempty"`
+	// Deployment whose desired replica count fed node planning.
+	TargetDeployment string `json:"targetDeployment,omitempty"`
+	// Desired pod replicas observed by node scaling.
+	DesiredReplicas int32 `json:"desiredReplicas,omitempty"`
+	// Whether worker planning used a manual or automatic target.
+	WorkerTargetMode string `json:"workerTargetMode,omitempty"`
+	// Worker-capacity strategy used for target computation.
+	WorkerCapacityStrategy string `json:"workerCapacityStrategy,omitempty"`
+	// Final worker target after bounds are applied.
+	TargetWorkerCount int32 `json:"targetWorkerCount,omitempty"`
+	// Raw worker target before min/max bounds are applied.
+	RawTargetWorkerCount int32 `json:"rawTargetWorkerCount,omitempty"`
+	// Unschedulable workload pods observed during planning.
+	UnschedulablePods int32 `json:"unschedulablePods,omitempty"`
+	// Extra safety pods reserved by worker capacity policy.
+	SafetyPods int32 `json:"safetyPods,omitempty"`
+	// Pod count the worker planner tried to provide capacity for.
+	DesiredPodsForCapacity int32 `json:"desiredPodsForCapacity,omitempty"`
+	// Allocatable CPU assumed for each worker node.
+	NodeAllocatableMilliCPU int32 `json:"nodeAllocatableMilliCpu,omitempty"`
+	// Requested CPU assumed for each workload pod.
+	PodRequestMilliCPU int32 `json:"podRequestMilliCpu,omitempty"`
+	// Number of workload pods each worker can host.
+	PodsPerWorker int32 `json:"podsPerWorker,omitempty"`
+	// Minimum worker count allowed by policy.
+	MinWorkerCount int32 `json:"minWorkerCount,omitempty"`
+	// Maximum worker count allowed by policy.
+	MaxWorkerCount int32 `json:"maxWorkerCount,omitempty"`
+	// Ready workers counted during target computation.
+	ReadyWorkerCount int32 `json:"readyWorkerCount,omitempty"`
+	// App pods already scheduled on managed workers.
+	CurrentAppScheduledPods int32 `json:"currentAppScheduledPods,omitempty"`
+	// Total app slot capacity observed on ready workers.
+	TotalAppSlotCapacity int32 `json:"totalAppSlotCapacity,omitempty"`
+	// App slots still missing after using all ready workers.
+	MissingAppSlots int32 `json:"missingAppSlots,omitempty"`
+	// Ready workers required to satisfy current slot demand.
+	RequiredReadyWorkers int32 `json:"requiredReadyWorkers,omitempty"`
+	// Ready workers observed by ensure_worker state tracking.
+	ObservedReadyWorkers int32 `json:"observedReadyWorkers,omitempty"`
+	// Pending worker create operations tracked in status.
+	PendingCreateWorkers int32 `json:"pendingCreateWorkers,omitempty"`
+	// Pending worker delete operations tracked in status.
+	PendingDeleteWorkers int32 `json:"pendingDeleteWorkers,omitempty"`
+	// Effective worker count after pending create/delete adjustments.
+	EffectiveWorkers int32 `json:"effectiveWorkers,omitempty"`
+	// Worker creations enqueued by this reconcile.
+	WorkersToCreate int32 `json:"workersToCreate,omitempty"`
+	// Worker deletions enqueued by this reconcile.
+	WorkersToDelete int32 `json:"workersToDelete,omitempty"`
+	// Latest planner action label.
+	LastAction string `json:"lastAction,omitempty"`
+	// Human-readable explanation for the latest planner action.
+	LastReason string `json:"lastReason,omitempty"`
+	// Active worker operations after executor reconciliation.
+	ActiveOperations []WorkerOperationStatus `json:"activeOperations,omitempty"`
 }
 
 type WorkerPrototypeStatus struct {

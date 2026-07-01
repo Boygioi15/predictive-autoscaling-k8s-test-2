@@ -2,6 +2,7 @@
 REGISTRY ?= docker.io/boygioi
 DEMO_APP_IMAGE ?= $(REGISTRY)/general-resource-demand-service:latest
 FORECASTING_IMAGE ?= $(REGISTRY)/forecasting-service:latest
+SYSTEM_SHOWCASE_IMAGE ?= $(REGISTRY)/system-showcase:latest
 VM_JOB_IMAGE ?= $(REGISTRY)/vm-job:latest
 
 autoscale-demo-app:
@@ -19,6 +20,8 @@ build-push-custom-load-generator:
 
 build-push-forecasting-service:
 	docker buildx build --push -t $(FORECASTING_IMAGE) ./forecasting-service
+build-push-system-showcase:
+	docker buildx build --push -t $(SYSTEM_SHOWCASE_IMAGE) ./system-showcase
 build-push-vm-job:
 	docker buildx build --push -t $(VM_JOB_IMAGE) -f ./linux-script/vm-job.Dockerfile .
 
@@ -38,6 +41,19 @@ restart-forecasting-service:
 	- kubectl apply -f k8s/forecasting-service.yaml
 	- kubectl rollout restart deployment/forecasting-service-deployment
 	- kubectl logs deploy/forecasting-service-deployment
+deploy-system-showcase:
+	- kubectl apply -f ./k8s/system-showcase.yaml
+	- kubectl set image deployment/system-showcase-deployment system-showcase-container=$(SYSTEM_SHOWCASE_IMAGE)
+	- kubectl apply -f ./k8s/system-showcase-ingress.yaml
+	- kubectl rollout status deployment/system-showcase-deployment --timeout=120s
+restart-system-showcase:
+	- kubectl apply -f ./k8s/system-showcase.yaml
+	- kubectl set image deployment/system-showcase-deployment system-showcase-container=$(SYSTEM_SHOWCASE_IMAGE)
+	- kubectl apply -f ./k8s/system-showcase-ingress.yaml
+	- kubectl rollout restart deployment/system-showcase-deployment
+	- kubectl rollout status deployment/system-showcase-deployment --timeout=120s
+logs-system-showcase:
+	- kubectl logs deploy/system-showcase-deployment --tail=200 -f
 deploy-custom-scaler: 
 	make -C ./custom-scaler/ install
 	make -C ./custom-scaler/ deploy IMG=docker.io/boygioi/custom-scaler:latest

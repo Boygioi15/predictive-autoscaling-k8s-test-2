@@ -55,13 +55,22 @@ type CustomScalerControllerBase struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create
 
 type forecastResponse struct {
-	Deployment     string                  `json:"deployment"`
-	ContractID     string                  `json:"contract_id"`
-	TargetMetric   string                  `json:"target_metric"`
-	StepSeconds    int                     `json:"step_seconds"`
-	Predictions    []float64               `json:"predictions"`
-	PredictionRows []forecastPredictionRow `json:"prediction_rows"`
-	Observed       map[string][]*float64   `json:"observed"`
+	Deployment          string                  `json:"deployment"`
+	ContractID          string                  `json:"contract_id"`
+	TargetMetric        string                  `json:"target_metric"`
+	FeatureMetrics      []string                `json:"feature_metrics"`
+	StepSeconds         int                     `json:"step_seconds"`
+	Predictions         []float64               `json:"predictions"`
+	PredictionRows      []forecastPredictionRow `json:"prediction_rows"`
+	Observed            map[string][]*float64   `json:"observed"`
+	ModelName           string                  `json:"model_name"`
+	ModelVersion        string                  `json:"model_version"`
+	GeneratedAt         string                  `json:"generated_at"`
+	RemoteEndpoint      string                  `json:"remote_endpoint"`
+	RemoteContract      string                  `json:"remote_contract"`
+	RequiredHistoryRows int                     `json:"required_history_rows"`
+	ProvidedHistoryRows int                     `json:"provided_history_rows"`
+	BufferedHistoryRows int                     `json:"buffered_history_rows"`
 }
 
 type forecastPredictionRow struct {

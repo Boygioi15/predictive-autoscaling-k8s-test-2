@@ -97,7 +97,12 @@ func (r *NodeScalingReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		)
 	}
 
-	if err := r.patchWorkerPrototypeStatus(ctx, &customScaler, workerPlan); err != nil {
+	if err := r.patchWorkerPrototypeStatus(
+		ctx,
+		&customScaler,
+		workerPlan,
+		buildLastNodeLoopStatus(&customScaler, workerPlan, workerTarget, workerNow),
+	); err != nil {
 		log.Error(err, "Failed to update node scaling status")
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
@@ -116,14 +121,25 @@ func (r *CustomScalerControllerBase) patchWorkerPrototypeStatus(
 	ctx context.Context,
 	customScaler *autoscalingv1.CustomScaler,
 	plan *workerPrototypePlan,
+	lastLoop *autoscalingv1.NodeScalerLoopStatus,
 ) error {
-	if plan == nil || !workerPrototypeStatusChanged(customScaler.Status.WorkerPrototype, plan) {
+	if plan == nil {
+		return nil
+	}
+
+	statusChanged := workerPrototypeStatusChanged(customScaler.Status.WorkerPrototype, plan) || lastLoop != nil
+	if !statusChanged {
 		return nil
 	}
 
 	base := customScaler.DeepCopy()
 	updated := customScaler.DeepCopy()
 	updated.Status.WorkerPrototype = &plan.Status
+	if lastLoop != nil {
+		updated.Status.LastNodeLoop = lastLoop.DeepCopy()
+	} else {
+		updated.Status.LastNodeLoop = nil
+	}
 
 	return r.Status().Patch(ctx, updated, client.MergeFrom(base))
 }
